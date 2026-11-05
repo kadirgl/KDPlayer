@@ -1,0 +1,77 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "clock": {
+      "$client": {
+        ".read": "$client.length <= 40",
+        ".write": "$client.length <= 40",
+        ".validate": "newData.isNumber()"
+      }
+    },
+    "rooms": {
+      "$code": {
+        ".read": "$code.matches(/^[A-HJ-NP-Z2-9]{6}$/)",
+        ".write": "$code.matches(/^[A-HJ-NP-Z2-9]{6}$/)",
+        "meta": {
+          ".validate": "newData.hasChildren(['name', 'createdBy', 'controlMode'])",
+          "name": { ".validate": "newData.isString() && newData.val().length <= 60" },
+          "createdBy": { ".validate": "newData.isString() && newData.val().length <= 40" },
+          "controlMode": { ".validate": "newData.val() === 'everyone' || newData.val() === 'host'" },
+          "createdAt": { ".validate": "newData.isNumber()" },
+          "locked": { ".validate": "newData.isBoolean()" },
+          "readyCheck": { ".validate": "newData.isBoolean()" },
+          "startAt": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        },
+        "media": {
+          ".validate": "newData.hasChildren(['title', 'durationMs'])",
+          "title": { ".validate": "newData.isString() && newData.val().length <= 200" },
+          "detail": { ".validate": "newData.isString() && newData.val().length <= 200" },
+          "release": { ".validate": "newData.isString() && newData.val().length <= 40" },
+          "fileHash": { ".validate": "newData.isString() && newData.val().length <= 32" },
+          "durationMs": { ".validate": "newData.isNumber()" },
+          "fps": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        },
+        "playback": {
+          ".validate": "newData.hasChildren(['state', 'positionMs', 'updatedAt', 'by', 'seq'])",
+          "state": { ".validate": "newData.val() === 'playing' || newData.val() === 'paused'" },
+          "positionMs": { ".validate": "newData.isNumber()" },
+          "rate": { ".validate": "newData.isNumber() && newData.val() >= 0.25 && newData.val() <= 4" },
+          "updatedAt": { ".validate": "newData.isNumber()" },
+          "by": { ".validate": "newData.isString() && newData.val().length <= 40" },
+          "seq": { ".validate": "newData.isNumber()" },
+          "action": { ".validate": "newData.isString() && newData.val().length <= 12" },
+          "$other": { ".validate": false }
+        },
+        "subtitle": {
+          ".validate": "newData.hasChildren(['contentGz', 'by', 'version'])",
+          "contentGz": { ".validate": "newData.isString() && newData.val().length <= 280000" },
+          "name": { ".validate": "newData.isString() && newData.val().length <= 200" },
+          "$other": { ".validate": "newData.isNumber() || newData.isBoolean() || (newData.isString() && newData.val().length <= 60)" }
+        },
+        "members": {
+          "$client": {
+            ".validate": "newData.hasChildren(['name'])",
+            "name": { ".validate": "newData.isString() && newData.val().length <= 40" },
+            "$other": { ".validate": "newData.isNumber() || newData.isBoolean() || (newData.isString() && newData.val().length <= 40)" }
+          }
+        },
+        "messages": {
+          "$id": {
+            ".validate": "!data.exists() && newData.hasChildren(['uid', 'text', 'type', 'ts'])",
+            "text": { ".validate": "newData.isString() && newData.val().length <= 500" },
+            "type": { ".validate": "newData.val() === 'text' || newData.val() === 'system' || newData.val() === 'reaction'" },
+            "uid": { ".validate": "newData.isString() && newData.val().length <= 40" },
+            "name": { ".validate": "newData.isString() && newData.val().length <= 40" },
+            "ts": { ".validate": "newData.isNumber()" },
+            "atMs": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}

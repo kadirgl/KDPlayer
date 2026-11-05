@@ -1,0 +1,595 @@
+import Foundation
+import Observation
+
+/// Altyazı servisi: arama sırası (dosyanın içi → yanındaki dosya → internet hash → internet ad),
+/// güven skoru, otomatik yükleme, senkron ve görünürdeki satırlar (spesifikasyon › Altyazı sistemi).
+@Observable
+final class SubtitleService {
+    // MARK: Modeller
+
+    enum Source: String, Codable {
+        case embedded, sidecar, openSubtitles, file, room
+
+        var title: String {
+            switch self {
+            case .embedded: "Dosyanın içi"
+            case .sidecar: "Yanındaki dosya"
+            case .openSubtitles: "OpenSubtitles"
+            case .file: "Dosyadan"
+            case .room: "Oda"
+            }
+        }
+    }
+
+    /// Bizim çizdiğimiz (harici) altyazı.
+    struct Loaded: Equatable {
+        var document: SubtitleDocument
+        var name: String
+        var language: String?
+        var source: Source
+        var fileURL: URL?
+        var encodingName: String
+        var repairNote: String?
+        var score: Int?
+        /// UTF-8'e çevrilmiş ham metin (odaya paylaşmak için).
+        var rawText: String = ""
+    }
+
+    struct Candidate: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let language: String
+        let source: Source
+        let score: Int
+        let hashMatch: Bool
+        let releaseMatch: Bool
+        let fpsMismatch: Bool
+        let fps: Double?
+        let downloads: Int
+        let fileID: Int?
+        let localURL: URL?
+
+        static func == (lhs: Candidate, rhs: Candidate) -> Bool { lhs.id == rhs.id }
+    }
+
+    struct SourceStatus: Identifiable, Equatable {
+        enum Status: Equatable { case waiting, running, found(Int), none, skipped(String) }
+        let id: String
+        var status: Status
+    }
+
+    enum Phase: Equatable {
+        case idle
+        case searching
+        case finished
+        case notFound
+    }
+
+    // MARK: Durum
+
+    private(set) var phase: Phase = .idle
+    private(set) var sources: [SourceStatus] = []
+    private(set) var candidates: [Candidate] = []
+    private(set) var loaded: Loaded?
+    /// İkinci altyazı (üstte, %70 boyutta).
+    private(set) var secondary: Loaded?
+    /// VLC'nin çizdiği gömülü parça (seçiliyse harici altyazı kapalıdır).
+    private(set) var embeddedTrackID: Int32?
+    var timing = SubtitleTiming() {
+        didSet { if timing != oldValue { applyTiming() } }
+    }
+    var enabled = true
+    var query = ""
+    var language: String
+    /// Sonuç satırı seçilince indirilip hafızada tutulan önizleme (oynatıcıya yüklenmez).
+    private(set) var previews: [String: SubtitleDocument] = [:]
+    private(set) var loadingCandidateID: String?
+    private(set) var lastError: String?
+    private(set) var remainingDownloads: Int?
+    /// "Duy ve bas" ilk işaret noktası (kaynak, görüntü zamanları).
+    private(set) var syncAnchor: (source: Double, display: Double)?
+
+    // MARK: Bağlam
+
+    @ObservationIgnored private weak var player: PlayerController?
+    @ObservationIgnored private var mediaURL: URL?
+    @ObservationIgnored private(set) var fileHash: String?
+    @ObservationIgnored private(set) var parsedName = ParsedFilename(title: "")
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored var onAutoLoaded: ((Candidate?, Loaded) -> Void)?
+    @ObservationIgnored var onEmbeddedSelected: ((MediaTrack) -> Void)?
+    @ObservationIgnored var onNeedsAttention: (() -> Void)?
+    @ObservationIgnored var onPersist: (() -> Void)?
+    @ObservationIgnored var onTimingChanged: ((SubtitleTiming) -> Void)?
+    /// Altyazı (yükleme / değiştirme) değişince; oda "odanın altyazısını kullanıyor" bilgisini günceller.
+    @ObservationIgnored var onSubtitleReplaced: ((Source?) -> Void)?
+
+    init() {
+        let languages = UserDefaults.standard.stringArray(forKey: SettingsKey.subtitleLanguages) ?? ["tr", "en"]
+        language = languages.first ?? "tr"
+    }
+
+    var preferredLanguages: [String] {
+        UserDefaults.standard.stringArray(forKey: SettingsKey.subtitleLanguages) ?? ["tr", "en"]
+    }
+
+    var hasSubtitle: Bool { loaded != nil || embeddedTrackID != nil }
+
+    // MARK: Oturum
+
+    func attach(player: PlayerController) {
+        self.player = player
+    }
+
+    func reset(for url: URL, hash: String?) {
+        searchTask?.cancel()
+        mediaURL = url
+        fileHash = hash
+        parsedName = ParsedFilename(filename: url.lastPathComponent)
+        query = parsedName.query
+        phase = .idle
+        sources = []
+        candidates = []
+        loaded = nil
+        secondary = nil
+        embeddedTrackID = nil
+        timing = .identity
+        previews = [:]
+        lastError = nil
+        syncAnchor = nil
+        enabled = true
+        language = preferredLanguages.first ?? "tr"
+    }
+
+    /// Kaydedilmiş altyazıyı geri yükler; yoksa otomatik aramayı başlatır.
+    func start(restoring record: WatchRecord?) {
+        if let record, record.subtitleEnabled == false {
+            enabled = false
+        }
+        if let record, let path = record.subtitlePath, FileManager.default.fileExists(atPath: path) {
+            let url = URL(fileURLWithPath: path)
+            if let loaded = try? loadFile(url, source: Source(rawValue: record.subtitleSource ?? "") ?? .file, name: record.subtitleName, language: record.subtitleLanguage) {
+                self.loaded = loaded
+                timing = record.subtitleTiming
+                phase = .finished
+                return
+            }
+        }
+        if let record, let id = record.embeddedSubtitleID {
+            searchTask = Task { @MainActor [weak self] in
+                guard let self, await self.waitForTracks() else { return }
+                if let track = self.player?.embeddedSubtitles.first(where: { $0.id == Int32(id) }) {
+                    self.selectEmbedded(track)
+                    self.timing = record.subtitleTiming
+                }
+            }
+            return
+        }
+        guard UserDefaults.standard.bool(forKey: SettingsKey.subtitleAutoLoad) else { return }
+        autoSearch()
+    }
+
+    // MARK: Otomatik arama
+
+    func autoSearch() {
+        searchTask?.cancel()
+        phase = .searching
+        let hasKey = OpenSubtitlesClient.configuredKey != nil
+        sources = [
+            SourceStatus(id: Source.embedded.title, status: .running),
+            SourceStatus(id: Source.sidecar.title, status: .waiting),
+            SourceStatus(id: Source.openSubtitles.title, status: hasKey ? .waiting : .skipped("anahtar yok")),
+        ]
+        searchTask = Task { @MainActor [weak self] in
+            await self?.runPipeline()
+        }
+    }
+
+    @MainActor
+    private func runPipeline() async {
+        let languages = preferredLanguages
+        let preferEmbedded = UserDefaults.standard.bool(forKey: SettingsKey.subtitlePreferEmbedded)
+
+        // 1. Dosyanın içi
+        if await waitForTracks(), let player {
+            let textTracks = player.embeddedSubtitles.filter { !$0.isImageSubtitle && !$0.isForced }
+            let match = languages.lazy.compactMap { code in textTracks.first { $0.languageCode == code } }.first
+            if let match, preferEmbedded {
+                setStatus(Source.embedded.title, .found(1))
+                selectEmbedded(match)
+                phase = .finished
+                onEmbeddedSelected?(match)
+                sources = sources.map { $0.status == .waiting ? SourceStatus(id: $0.id, status: .skipped("gerek yok")) : $0 }
+                return
+            }
+            setStatus(Source.embedded.title, player.embeddedSubtitles.isEmpty ? .none : .found(player.embeddedSubtitles.count))
+            // Dosyada altyazı varsa ama tercih edilen dilde değilse VLC'nin otomatik seçtiğini kapat.
+            if !player.embeddedSubtitles.isEmpty, embeddedTrackID == nil { player.selectEmbeddedSubtitle(-1) }
+        } else {
+            setStatus(Source.embedded.title, .none)
+        }
+        if Task.isCancelled { return }
+
+        // 2. Yanındaki dosya
+        setStatus(Source.sidecar.title, .running)
+        let sidecars = findSidecars()
+        if !sidecars.isEmpty {
+            setStatus(Source.sidecar.title, .found(sidecars.count))
+            candidates = sidecars
+            let best = languages.lazy.compactMap { code in sidecars.first { $0.language == code } }.first ?? sidecars.first
+            if let best, preferEmbedded, await load(best, auto: true) {
+                phase = .finished
+                skipRemaining()
+                return
+            }
+        } else {
+            setStatus(Source.sidecar.title, .none)
+        }
+        if Task.isCancelled { return }
+
+        // 3–4. İnternet: hash, sonra ad
+        guard let key = OpenSubtitlesClient.configuredKey else {
+            finishSearch()
+            return
+        }
+        setStatus(Source.openSubtitles.title, .running)
+        let client = OpenSubtitlesClient(apiKey: key)
+        var results: [OpenSubtitlesClient.Result] = []
+        do {
+            if let hash = fileHash {
+                results = try await client.search(hash: hash, query: nil, season: parsedName.season, episode: parsedName.episode, languages: languages)
+            }
+            if !results.contains(where: \.hashMatch) {
+                let byName = try await client.search(hash: nil, query: parsedName.title, season: parsedName.season, episode: parsedName.episode, languages: languages)
+                let known = Set(results.map(\.fileID))
+                results += byName.filter { !known.contains($0.fileID) }
+            }
+            setStatus(Source.openSubtitles.title, results.isEmpty ? .none : .found(results.count))
+        } catch {
+            lastError = error.localizedDescription
+            setStatus(Source.openSubtitles.title, .skipped(error is OpenSubtitlesClient.ClientError ? "sınır" : "bağlantı yok"))
+        }
+        if Task.isCancelled { return }
+
+        candidates = (candidates + results.map(makeCandidate)).sorted(by: Self.ranking(languages: languages))
+        finishSearch()
+    }
+
+    @MainActor
+    private func finishSearch() {
+        let languages = preferredLanguages
+        let primary = candidates.filter { $0.language == languages.first }
+        guard let best = primary.first ?? candidates.first else {
+            phase = .notFound
+            onNeedsAttention?()
+            return
+        }
+        phase = .finished
+        if loaded != nil { return }
+        // ≥ %60: en iyisini yükle (≥ %90 sessiz, altı "Değiştir" vurgulu). Altı: paneli aç.
+        if best.score >= 60 {
+            Task { @MainActor in _ = await load(best, auto: true) }
+        } else {
+            onNeedsAttention?()
+        }
+    }
+
+    /// Kullanıcının "Farklı adla ara" ya da dil değiştirmesiyle yeniden arama (yalnızca internet).
+    func searchOnline() {
+        searchTask?.cancel()
+        guard let key = OpenSubtitlesClient.configuredKey else {
+            lastError = OpenSubtitlesClient.ClientError.missingKey.localizedDescription
+            phase = .notFound
+            return
+        }
+        phase = .searching
+        sources = [SourceStatus(id: Source.openSubtitles.title, status: .running)]
+        let query = self.query
+        let languages = [language]
+        searchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let parsed = ParsedFilename(filename: query)
+                let results = try await OpenSubtitlesClient(apiKey: key).search(
+                    hash: self.fileHash, query: parsed.title, season: parsed.season ?? self.parsedName.season,
+                    episode: parsed.episode ?? self.parsedName.episode, languages: languages
+                )
+                if Task.isCancelled { return }
+                let local = self.findSidecars().filter { $0.language == self.language }
+                self.candidates = (local + results.map(self.makeCandidate)).sorted(by: Self.ranking(languages: languages))
+                self.setStatus(Source.openSubtitles.title, results.isEmpty ? .none : .found(results.count))
+                self.phase = self.candidates.isEmpty ? .notFound : .finished
+            } catch {
+                self.lastError = error.localizedDescription
+                self.setStatus(Source.openSubtitles.title, .skipped("hata"))
+                self.phase = self.candidates.isEmpty ? .notFound : .finished
+            }
+        }
+    }
+
+    // MARK: Yükleme
+
+    /// Adayı indirir/okur ve oynatıcıya uygular.
+    @MainActor @discardableResult
+    func load(_ candidate: Candidate, auto: Bool = false) async -> Bool {
+        loadingCandidateID = candidate.id
+        defer { loadingCandidateID = nil }
+        do {
+            let document: SubtitleDocument
+            let decoded: SubtitleTextDecoder.Result
+            var fileURL = candidate.localURL
+            if let localURL = candidate.localURL {
+                (document, decoded) = try Self.read(localURL)
+            } else if let fileID = candidate.fileID, let key = OpenSubtitlesClient.configuredKey {
+                let (data, remaining) = try await OpenSubtitlesClient(apiKey: key, timeout: 10).download(fileID: fileID)
+                remainingDownloads = remaining
+                (document, decoded) = try Self.parse(data)
+                // Yeniden açılışta internete gerek kalmasın: UTF-8 olarak sakla.
+                let name = "\(fileHash ?? UUID().uuidString).\(candidate.language).\(document.format.rawValue)"
+                let saved = AppInfo.subtitlesDirectory.appendingPathComponent(name)
+                try? decoded.text.write(to: saved, atomically: true, encoding: .utf8)
+                fileURL = saved
+            } else {
+                return false
+            }
+            if Task.isCancelled && auto { return false }
+            let loaded = Loaded(
+                document: document, name: candidate.name, language: candidate.language, source: candidate.source,
+                fileURL: fileURL, encodingName: decoded.encodingName, repairNote: decoded.repairNote, score: candidate.score,
+                rawText: decoded.text
+            )
+            apply(loaded, resetTiming: true)
+            if candidate.fpsMismatch, let fps = candidate.fps, let videoFPS = player?.videoTrack?.frameRate {
+                timing = SubtitleTiming(scale: SubtitleTiming.fps(from: fps, to: videoFPS), offset: 0)
+            }
+            if auto { onAutoLoaded?(candidate, loaded) }
+            return true
+        } catch {
+            lastError = (error as? LocalizedError)?.errorDescription ?? "Altyazı açılamadı"
+            return false
+        }
+    }
+
+    /// Sürükle-bırak ya da "Dosyadan ekle".
+    @discardableResult
+    func loadUserFile(_ url: URL) -> Bool {
+        do {
+            let loaded = try loadFile(url, source: .file, name: url.lastPathComponent, language: Language.guess(from: url.lastPathComponent) ?? language)
+            apply(loaded, resetTiming: true)
+            phase = .finished
+            return true
+        } catch {
+            lastError = "Bu dosya okunamadı"
+            return false
+        }
+    }
+
+    /// Odadan gelen altyazı (ekran 15).
+    func loadShared(text: String, name: String, language: String?, timing: SubtitleTiming) -> Bool {
+        guard let decoded = SubtitleTextDecoder.decode(Data(text.utf8)), let document = try? SubtitleParser.parse(decoded.text) else { return false }
+        apply(Loaded(document: document, name: name, language: language, source: .room, fileURL: nil, encodingName: "UTF-8", repairNote: nil, score: nil, rawText: decoded.text), resetTiming: false)
+        self.timing = timing
+        return true
+    }
+
+    func loadSecondary(_ url: URL) {
+        secondary = try? loadFile(url, source: .file, name: url.lastPathComponent, language: Language.guess(from: url.lastPathComponent))
+    }
+
+    func clearSecondary() { secondary = nil }
+
+    func selectEmbedded(_ track: MediaTrack) {
+        loaded = nil
+        embeddedTrackID = track.id
+        enabled = true
+        player?.selectEmbeddedSubtitle(track.id)
+        applyTiming()
+        onPersist?()
+        onSubtitleReplaced?(.embedded)
+    }
+
+    func turnOff() {
+        enabled = false
+        if embeddedTrackID != nil { player?.selectEmbeddedSubtitle(-1) }
+        onPersist?()
+    }
+
+    func turnOn() {
+        enabled = true
+        if let embeddedTrackID { player?.selectEmbeddedSubtitle(embeddedTrackID) }
+        onPersist?()
+    }
+
+    private func apply(_ loaded: Loaded, resetTiming: Bool) {
+        if embeddedTrackID != nil { player?.selectEmbeddedSubtitle(-1) }
+        embeddedTrackID = nil
+        self.loaded = loaded
+        enabled = true
+        if resetTiming { timing = .identity }
+        onPersist?()
+        onSubtitleReplaced?(loaded.source)
+    }
+
+    private func loadFile(_ url: URL, source: Source, name: String?, language: String?) throws -> Loaded {
+        let (document, decoded) = try Self.read(url)
+        return Loaded(document: document, name: name ?? url.lastPathComponent, language: language, source: source,
+                      fileURL: url, encodingName: decoded.encodingName, repairNote: decoded.repairNote, score: nil, rawText: decoded.text)
+    }
+
+    static func read(_ url: URL) throws -> (SubtitleDocument, SubtitleTextDecoder.Result) {
+        try parse(try Data(contentsOf: url))
+    }
+
+    static func parse(_ data: Data) throws -> (SubtitleDocument, SubtitleTextDecoder.Result) {
+        let preference = SubtitleTextDecoder.Preference(rawValue: UserDefaults.standard.string(forKey: SettingsKey.subtitleEncoding) ?? "auto") ?? .auto
+        guard let decoded = SubtitleTextDecoder.decode(data, preference: preference) else { throw SubtitleParser.ParseError.unknownFormat }
+        return (try SubtitleParser.parse(decoded.text), decoded)
+    }
+
+    // MARK: Önizleme
+
+    /// Sonuç satırı seçilince indirilip hafızada ayrıştırılır ama oynatıcıya yüklenmez.
+    @MainActor
+    func preview(_ candidate: Candidate) async {
+        guard previews[candidate.id] == nil else { return }
+        if let url = candidate.localURL, let (document, _) = try? Self.read(url) {
+            previews[candidate.id] = document
+        }
+        // İnternet adaylarını önizleme için indirmek günlük kotayı tüketir; yalnızca yerel önizleme.
+    }
+
+    // MARK: Görünen satırlar
+
+    func visibleCues(at time: Double) -> [SubtitleCue] {
+        guard enabled, let loaded else { return [] }
+        return loaded.document.cues(at: time, timing: timing)
+    }
+
+    func visibleSecondaryCues(at time: Double) -> [SubtitleCue] {
+        guard enabled, let secondary else { return [] }
+        return secondary.document.cues(at: time, timing: .identity)
+    }
+
+    // MARK: Senkron
+
+    /// G / H: ±100 ms. Görüntüde daha geç = pozitif.
+    func nudge(by milliseconds: Int) {
+        timing.offset += Double(milliseconds) / 1000
+        syncAnchor = nil
+    }
+
+    func setOffset(milliseconds: Int) {
+        timing.offset = Double(milliseconds) / 1000
+    }
+
+    func resetTiming() {
+        timing = .identity
+        syncAnchor = nil
+    }
+
+    /// "Duy ve bas": konuşmayı duyduğun an Space. Ekranda o ana en yakın başlayan satır o ana çekilir.
+    /// İkinci işaret noktasında ölçek de hesaplanır: t' = a·t + b. Aradaki kayma satır aralığından
+    /// büyük olabileceği için ikinci noktada yaygın FPS oranları denenip en iyi eşleşen satır seçilir.
+    @discardableResult
+    func markSpeech(at displayTime: Double) -> Bool {
+        guard let cues = loaded?.document.cues, !cues.isEmpty else { return false }
+
+        if let anchor = syncAnchor, abs(displayTime - anchor.display) > 60 {
+            let ratios = [1, 25 / 23.976, 23.976 / 25, 24 / 25.0, 25 / 24.0, 24 / 23.976, 23.976 / 24]
+            var best: (cue: SubtitleCue, distance: Double)?
+            for ratio in ratios {
+                let offset = anchor.display - ratio * anchor.source
+                let source = (displayTime - offset) / ratio
+                guard let cue = Self.nearest(in: cues, to: source) else { continue }
+                let distance = abs(cue.start - source)
+                if best == nil || distance < best!.distance { best = (cue, distance) }
+            }
+            if let cue = best?.cue, cue.start != anchor.source {
+                let scale = (displayTime - anchor.display) / (cue.start - anchor.source)
+                if (0.9...1.1).contains(scale) {
+                    timing = SubtitleTiming(scale: scale, offset: anchor.display - scale * anchor.source)
+                    syncAnchor = (cue.start, displayTime)
+                    return true
+                }
+            }
+        }
+
+        // Tek nokta: şu an görünen ya da en yakın başlayan satır.
+        let source = timing.sourceTime(for: displayTime)
+        guard let cue = Self.nearest(in: cues, to: source) else { return false }
+        timing.offset = displayTime - timing.scale * cue.start
+        syncAnchor = (cue.start, displayTime)
+        return true
+    }
+
+    /// Başlangıcı `time`'a en yakın satır (ikili arama).
+    private static func nearest(in cues: [SubtitleCue], to time: Double) -> SubtitleCue? {
+        var low = 0, high = cues.count
+        while low < high {
+            let mid = (low + high) / 2
+            if cues[mid].start < time { low = mid + 1 } else { high = mid }
+        }
+        let candidates = [low - 1, low].filter { $0 >= 0 && $0 < cues.count }.map { cues[$0] }
+        return candidates.min { abs($0.start - time) < abs($1.start - time) }
+    }
+
+    private func applyTiming() {
+        if embeddedTrackID != nil { player?.setEmbeddedSubtitleDelay(timing.offsetMilliseconds) }
+        onPersist?()
+        onTimingChanged?(timing)
+    }
+
+    // MARK: Yardımcılar
+
+    @MainActor
+    private func waitForTracks() async -> Bool {
+        for _ in 0..<30 {
+            if Task.isCancelled { return false }
+            if let player, player.tracksRevision > 0 { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+    }
+
+    private func setStatus(_ id: String, _ status: SourceStatus.Status) {
+        if let index = sources.firstIndex(where: { $0.id == id }) { sources[index].status = status }
+    }
+
+    private func skipRemaining() {
+        sources = sources.map { $0.status == .waiting ? SourceStatus(id: $0.id, status: .skipped("gerek yok")) : $0 }
+    }
+
+    /// Aynı klasörde <ad>.tr.srt, <ad>.srt, <ad>.ass…
+    func findSidecars() -> [Candidate] {
+        guard let mediaURL else { return [] }
+        let folder = mediaURL.deletingLastPathComponent()
+        let base = mediaURL.deletingPathExtension().lastPathComponent.lowercased()
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        return files.compactMap { url -> Candidate? in
+            guard AppInfo.subtitleExtensions.contains(url.pathExtension.lowercased()) else { return nil }
+            let name = url.deletingPathExtension().lastPathComponent.lowercased()
+            guard name.hasPrefix(base) || base.hasPrefix(name) else { return nil }
+            let suffix = String(name.dropFirst(min(base.count, name.count)))
+            let language = Language.guess(from: suffix.replacingOccurrences(of: ".", with: " ")) ?? Language.guess(from: name.replacingOccurrences(of: ".", with: " ")) ?? self.language
+            return Candidate(
+                id: url.path, name: url.lastPathComponent, language: language, source: .sidecar,
+                score: name == base || suffix.count <= 4 ? 95 : 80, hashMatch: false, releaseMatch: true, fpsMismatch: false,
+                fps: nil, downloads: 0, fileID: nil, localURL: url
+            )
+        }
+    }
+
+    private func makeCandidate(_ result: OpenSubtitlesClient.Result) -> Candidate {
+        let release = ParsedFilename(filename: result.release + ".x").release
+        let releaseMatch = release != nil && release == parsedName.release
+        let videoFPS = player?.videoTrack?.frameRate
+        let fpsMismatch = result.fps.flatMap { fps in videoFPS.map { abs($0 - fps) > 0.05 } } ?? false
+        var score: Int
+        if result.hashMatch {
+            score = 98 + (result.fromTrusted ? 1 : 0)
+        } else {
+            score = 50
+            if releaseMatch { score += 25 }
+            if let fps = result.fps, let videoFPS, abs(fps - videoFPS) <= 0.05 { score += 10 }
+            if fpsMismatch { score -= 5 }
+            score += min(10, Int(log10(Double(max(result.downloads, 1))) * 2.5))
+            score += Int(min(result.rating, 10) / 2)
+            score = min(score, 95)
+        }
+        return Candidate(
+            id: "os-\(result.fileID)", name: result.release.isEmpty ? result.fileName : result.release,
+            language: result.language, source: .openSubtitles, score: score, hashMatch: result.hashMatch,
+            releaseMatch: releaseMatch, fpsMismatch: fpsMismatch, fps: result.fps, downloads: result.downloads,
+            fileID: result.fileID, localURL: nil
+        )
+    }
+
+    private static func ranking(languages: [String]) -> (Candidate, Candidate) -> Bool {
+        { lhs, rhs in
+            let left = languages.firstIndex(of: lhs.language) ?? languages.count
+            let right = languages.firstIndex(of: rhs.language) ?? languages.count
+            if left != right { return left < right }
+            return lhs.score > rhs.score
+        }
+    }
+}

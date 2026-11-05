@@ -1,0 +1,18 @@
+# SwiftPM
+.build/
+.swiftpm/
+/Packages/
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# VLCKit (scripts/fetch-vlckit.sh indirir)
+Vendor/VLCKit.xcframework/
+
+# Paketleme çıktısı
+dist/
+
+.claude/settings.local.json
+.DS_Store
