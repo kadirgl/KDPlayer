@@ -463,7 +463,7 @@ private struct EmbeddedFoundState: View {
             .padding(14)
             .glass(radius: 20)
 
-            let tracks = session.player.embeddedSubtitles
+            let tracks = session.sortedEmbeddedSubtitles
             if tracks.count > 1 {
                 Text("Dosyada \(tracks.count) altyazı var")
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(Overlay.secondary).padding(.leading, 4)
@@ -472,7 +472,11 @@ private struct EmbeddedFoundState: View {
                         Button { session.subtitles.selectEmbedded(item) } label: {
                             HStack {
                                 Text("\(item.languageName) · \(item.codec ?? "")").font(.system(size: 13, weight: item.id == track.id ? .semibold : .regular))
-                                Spacer()
+                                    .lineLimit(1)
+                                if let label = item.extraLabel {
+                                    Text(label).font(.system(size: 11.5)).foregroundStyle(Overlay.tertiary).lineLimit(1)
+                                }
+                                Spacer(minLength: 6)
                                 if item.id == track.id {
                                     Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accent)
                                 } else if item.isImageSubtitle || item.isForced {
@@ -530,6 +534,14 @@ private struct SyncTab: View {
     private var subtitles: SubtitleService { session.subtitles }
 
     var body: some View {
+        ScrollView {
+            content.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.never)
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 14) {
             if !subtitles.hasSubtitle {
                 Text("Senkronlamak için önce bir altyazı seç.")
@@ -552,7 +564,7 @@ private struct SyncTab: View {
                         .buttonStyle(.kd(.glass, height: 38, fontSize: 12.5, fullWidth: true))
                 }
 
-                if subtitles.loaded != nil {
+                if subtitles.activeDocument != nil {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle(isOn: $session.listeningForSpeech) {
                             TitleSubtitle(title: "Duy ve bas", subtitle: "Bir sonraki konuşmayı duyunca Space'e bas. İki farklı noktada yaparsan FPS farkı da düzelir.")
@@ -562,7 +574,7 @@ private struct SyncTab: View {
                     .padding(14)
                     .glass(radius: 18)
                 } else {
-                    Text("Gömülü altyazıda yalnızca gecikme ayarlanabilir.")
+                    Text("Bu altyazı dosyada görüntü olarak duruyor; yalnızca gecikme ayarlanabilir.")
                         .font(.system(size: 12)).foregroundStyle(Overlay.secondary)
                 }
 
@@ -642,7 +654,7 @@ private struct AppearanceTab: View {
                     KDSegmented(selection: $store.style.position, options: SubtitleStyle.Position.allCases.map { ($0, $0.title) }, style: .neutral)
                 }
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Görünüm sadece sende değişir, odadakiler kendi ayarını kullanır. Dosyanın içindeki altyazılarda boyut uygulama yeniden açılınca geçerli olur; görüntü tabanlı (PGS) altyazılarda yalnızca boyut uygulanır.")
+                    Text("Görünüm sadece sende değişir, odadakiler kendi ayarını kullanır. Dosyanın içindeki metin altyazılara da uygulanır; görüntü tabanlı (PGS, VobSub) altyazılar dosyadaki haliyle görünür.")
                         .font(.system(size: 11.5)).foregroundStyle(Overlay.secondary).lineSpacing(2)
                     Button("Varsayılana dön") { store.style = .default }
                         .buttonStyle(.kd(.glass, height: 40, fontSize: 12.5, fullWidth: true))
@@ -693,36 +705,35 @@ struct SyncStrip: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text("Senkron").font(.system(size: 14, weight: .semibold))
-                    Text(Format.milliseconds(subtitles.timing.offsetMilliseconds))
-                        .font(.system(size: 22, weight: .bold)).monospacedDigit()
-                        .foregroundStyle(Theme.accent)
+            // Dar pencerede (panel açıkken video alanı küçülür) düğmeler kısalır, gerekirse alt satıra iner.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    offsetLabel
+                    Spacer(minLength: 8)
+                    buttons(compact: false)
                 }
-                Spacer(minLength: 8)
-                Button { session.nudgeSubtitle(by: -100) } label: { HStack(spacing: 6) { Text("−100 ms"); Kbd("G") } }
-                    .buttonStyle(.kd(.glass, height: 38, fontSize: 12.5))
-                    .fixedSize()
-                Button { session.nudgeSubtitle(by: 100) } label: { HStack(spacing: 6) { Text("+100 ms"); Kbd("H") } }
-                    .buttonStyle(.kd(.glass, height: 38, fontSize: 12.5))
-                    .fixedSize()
-                Button { session.listeningForSpeech.toggle() } label: {
-                    HStack(spacing: 6) { Image(systemName: "ear"); Text("Duy ve bas"); Kbd("Space", onAccent: session.listeningForSpeech) }
+                HStack(spacing: 8) {
+                    offsetLabel
+                    Spacer(minLength: 6)
+                    buttons(compact: true)
                 }
-                .buttonStyle(.kd(session.listeningForSpeech ? .primary : .glass, height: 38, fontSize: 12.5))
-                .fixedSize()
-                .help("Açıkken Space, bir sonraki altyazı satırını o ana hizalar")
+                VStack(alignment: .leading, spacing: 8) {
+                    offsetLabel
+                    buttons(compact: true)
+                }
             }
 
             timeline
 
-            HStack {
+            HStack(spacing: 8) {
                 Text(Format.time(max(0, session.player.time - window / 2)))
-                Spacer()
+                Spacer(minLength: 4)
                 Text(session.listeningForSpeech ? "Konuşmayı duyduğun an Space'e bas" : "Blokları sürükleyerek ince ayar yap")
                     .foregroundStyle(session.listeningForSpeech ? Theme.accent : Overlay.secondary)
-                Spacer()
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
+                Spacer(minLength: 4)
                 Text(Format.time(session.player.time + window / 2))
             }
             .font(.system(size: 11.5)).monospacedDigit()
@@ -735,12 +746,49 @@ struct SyncStrip: View {
         .onHover { session.hoveringControls = $0 }
     }
 
+    private var offsetLabel: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("Senkron").font(.system(size: 14, weight: .semibold))
+            Text(Format.milliseconds(subtitles.timing.offsetMilliseconds))
+                .font(.system(size: 22, weight: .bold)).monospacedDigit()
+                .foregroundStyle(Theme.accent)
+        }
+        .fixedSize()
+    }
+
+    private func buttons(compact: Bool) -> some View {
+        HStack(spacing: compact ? 6 : 10) {
+            Button { session.nudgeSubtitle(by: -100) } label: {
+                HStack(spacing: 6) { Text(compact ? "−100" : "−100 ms"); if !compact { Kbd("G") } }
+            }
+            .buttonStyle(.kd(.glass, height: 38, fontSize: 12.5))
+            .fixedSize()
+            .help("Altyazıyı 100 ms erkene al (G)")
+            Button { session.nudgeSubtitle(by: 100) } label: {
+                HStack(spacing: 6) { Text(compact ? "+100" : "+100 ms"); if !compact { Kbd("H") } }
+            }
+            .buttonStyle(.kd(.glass, height: 38, fontSize: 12.5))
+            .fixedSize()
+            .help("Altyazıyı 100 ms geciktir (H)")
+            Button { session.listeningForSpeech.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "ear")
+                    Text("Duy ve bas")
+                    if !compact { Kbd("Space", onAccent: session.listeningForSpeech) }
+                }
+            }
+            .buttonStyle(.kd(session.listeningForSpeech ? .primary : .glass, height: 38, fontSize: 12.5))
+            .fixedSize()
+            .help("Açıkken Space, bir sonraki altyazı satırını o ana hizalar")
+        }
+    }
+
     private var timeline: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
             let now = session.player.time
             let start = now - window / 2
-            let cues = subtitles.loaded?.document.cues(in: start...(start + window), timing: subtitles.timing) ?? []
+            let cues = subtitles.activeDocument?.cues(in: start...(start + window), timing: subtitles.timing) ?? []
             let activeIDs = Set(subtitles.visibleCues(at: now).map(\.id))
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.black.opacity(0.3))

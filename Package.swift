@@ -20,7 +20,8 @@ let package = Package(
         .testTarget(
             name: "KDPlayerTests",
             dependencies: ["KDPlayer"],
-            path: "Tests/KDPlayerTests"
+            path: "Tests/KDPlayerTests",
+            resources: [.copy("Fixtures")]
         )
     ]
 )

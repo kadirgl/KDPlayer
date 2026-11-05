@@ -73,8 +73,11 @@ final class SubtitleService {
     private(set) var loaded: Loaded?
     /// İkinci altyazı (üstte, %70 boyutta).
     private(set) var secondary: Loaded?
-    /// VLC'nin çizdiği gömülü parça (seçiliyse harici altyazı kapalıdır).
+    /// Seçili gömülü parça (seçiliyse harici altyazı kapalıdır).
     private(set) var embeddedTrackID: Int32?
+    /// Gömülü metin parçası dosyadan okunduysa onu biz çizeriz (kullanıcının stiliyle);
+    /// okunamıyorsa (görüntü altyazı, MKV dışı kap) VLC çizer.
+    private(set) var embeddedDocument: SubtitleDocument?
     var timing = SubtitleTiming() {
         didSet { if timing != oldValue { applyTiming() } }
     }
@@ -96,6 +99,9 @@ final class SubtitleService {
     @ObservationIgnored private(set) var fileHash: String?
     @ObservationIgnored private(set) var parsedName = ParsedFilename(title: "")
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var embeddedTask: Task<Void, Never>?
+    @ObservationIgnored private var extractor: EmbeddedSubtitleExtractor?
+    @ObservationIgnored private var embeddedCache: [Int32: SubtitleDocument] = [:]
     @ObservationIgnored var onAutoLoaded: ((Candidate?, Loaded) -> Void)?
     @ObservationIgnored var onEmbeddedSelected: ((MediaTrack) -> Void)?
     @ObservationIgnored var onNeedsAttention: (() -> Void)?
@@ -115,6 +121,14 @@ final class SubtitleService {
 
     var hasSubtitle: Bool { loaded != nil || embeddedTrackID != nil }
 
+    /// Bizim çizdiğimiz etkin altyazı (gömülü okunmuşsa o, yoksa harici).
+    var activeDocument: SubtitleDocument? {
+        embeddedTrackID != nil ? embeddedDocument : loaded?.document
+    }
+
+    /// Gömülü parçayı şu an VLC mi çiziyor (stil ayarları ona uygulanamaz).
+    var embeddedRenderedByVLC: Bool { embeddedTrackID != nil && embeddedDocument == nil }
+
     // MARK: Oturum
 
     func attach(player: PlayerController) {
@@ -123,6 +137,10 @@ final class SubtitleService {
 
     func reset(for url: URL, hash: String?) {
         searchTask?.cancel()
+        embeddedTask?.cancel()
+        extractor = MatroskaSubtitleReader.canRead(url) ? EmbeddedSubtitleExtractor(url: url) : nil
+        embeddedCache = [:]
+        embeddedDocument = nil
         mediaURL = url
         fileHash = hash
         parsedName = ParsedFilename(filename: url.lastPathComponent)
@@ -382,10 +400,45 @@ final class SubtitleService {
         loaded = nil
         embeddedTrackID = track.id
         enabled = true
-        player?.selectEmbeddedSubtitle(track.id)
+        embeddedTask?.cancel()
+        if let document = embeddedCache[track.id] {
+            embeddedDocument = document
+            player?.selectEmbeddedSubtitle(-1)
+        } else {
+            embeddedDocument = nil
+            player?.selectEmbeddedSubtitle(-1)
+            loadEmbedded(track)
+        }
         applyTiming()
         onPersist?()
         onSubtitleReplaced?(.embedded)
+    }
+
+    /// Metin parçasını dosyadan okur. Okuma uzarsa (dizinsiz dosya, yavaş disk) arada VLC çizer.
+    private func loadEmbedded(_ track: MediaTrack) {
+        guard let extractor, !track.isImageSubtitle, let player else {
+            player?.selectEmbeddedSubtitle(track.id)
+            return
+        }
+        let order = player.embeddedSubtitles.map { (id: $0.id, language: $0.languageCode) }
+        embeddedTask = Task { @MainActor [weak self] in
+            let fallback = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(1500))
+                guard !Task.isCancelled, let self, self.embeddedTrackID == track.id, self.embeddedDocument == nil, self.enabled else { return }
+                self.player?.selectEmbeddedSubtitle(track.id)
+            }
+            defer { fallback.cancel() }
+            let document = await extractor.document(forVLCTrack: track.id, order: order)
+            guard !Task.isCancelled, let self, self.embeddedTrackID == track.id else { return }
+            guard let document else {
+                if self.enabled { self.player?.selectEmbeddedSubtitle(track.id) }
+                return
+            }
+            self.embeddedCache[track.id] = document
+            self.embeddedDocument = document
+            self.player?.selectEmbeddedSubtitle(-1)
+            self.applyTiming()
+        }
     }
 
     func turnOff() {
@@ -396,13 +449,15 @@ final class SubtitleService {
 
     func turnOn() {
         enabled = true
-        if let embeddedTrackID { player?.selectEmbeddedSubtitle(embeddedTrackID) }
+        if let embeddedTrackID, embeddedDocument == nil { player?.selectEmbeddedSubtitle(embeddedTrackID) }
         onPersist?()
     }
 
     private func apply(_ loaded: Loaded, resetTiming: Bool) {
         if embeddedTrackID != nil { player?.selectEmbeddedSubtitle(-1) }
+        embeddedTask?.cancel()
         embeddedTrackID = nil
+        embeddedDocument = nil
         self.loaded = loaded
         enabled = true
         if resetTiming { timing = .identity }
@@ -441,8 +496,8 @@ final class SubtitleService {
     // MARK: Görünen satırlar
 
     func visibleCues(at time: Double) -> [SubtitleCue] {
-        guard enabled, let loaded else { return [] }
-        return loaded.document.cues(at: time, timing: timing)
+        guard enabled, let document = activeDocument else { return [] }
+        return document.cues(at: time, timing: timing)
     }
 
     func visibleSecondaryCues(at time: Double) -> [SubtitleCue] {
@@ -472,7 +527,7 @@ final class SubtitleService {
     /// büyük olabileceği için ikinci noktada yaygın FPS oranları denenip en iyi eşleşen satır seçilir.
     @discardableResult
     func markSpeech(at displayTime: Double) -> Bool {
-        guard let cues = loaded?.document.cues, !cues.isEmpty else { return false }
+        guard let cues = activeDocument?.cues, !cues.isEmpty else { return false }
 
         if let anchor = syncAnchor, abs(displayTime - anchor.display) > 60 {
             let ratios = [1, 25 / 23.976, 23.976 / 25, 24 / 25.0, 25 / 24.0, 24 / 23.976, 23.976 / 24]
@@ -514,7 +569,7 @@ final class SubtitleService {
     }
 
     private func applyTiming() {
-        if embeddedTrackID != nil { player?.setEmbeddedSubtitleDelay(timing.offsetMilliseconds) }
+        if embeddedTrackID != nil { player?.setEmbeddedSubtitleDelay(embeddedRenderedByVLC ? timing.offsetMilliseconds : 0) }
         onPersist?()
         onTimingChanged?(timing)
     }
@@ -591,5 +646,50 @@ final class SubtitleService {
             if left != right { return left < right }
             return lhs.score > rhs.score
         }
+    }
+}
+
+/// Gömülü metin altyazıları arka planda okur; VLC parça kimliğini MKV parça numarasıyla eşler.
+actor EmbeddedSubtitleExtractor {
+    let url: URL
+    private var reader: MatroskaSubtitleReader?
+    private var failed = false
+
+    init(url: URL) { self.url = url }
+
+    /// `order`: VLC'nin altyazı parçaları (kimlik, dil) listelediği sırayla; bu, dosyadaki sırayla aynıdır.
+    func document(forVLCTrack id: Int32, order: [(id: Int32, language: String?)]) -> SubtitleDocument? {
+        guard let reader = openReader(), let index = order.firstIndex(where: { $0.id == id }) else { return nil }
+        let tracks = reader.tracks
+        let language = order[index].language
+        let track: MatroskaSubtitleReader.Track?
+        if tracks.count == order.count {
+            track = tracks[index]
+        } else if let language {
+            // Sayılar tutmuyorsa aynı dildeki parçalar arasında aynı sıradaki.
+            let before = order[..<index].filter { $0.language == language }.count
+            track = tracks.filter { Self.code($0.language) == language }.dropFirst(before).first
+        } else {
+            track = nil
+        }
+        guard let track, track.isText else { return nil }
+        if let language, let own = Self.code(track.language), own != language { return nil }
+        guard let cues = try? reader.cues(for: track.number), !cues.isEmpty else { return nil }
+        return SubtitleDocument(cues: cues, format: track.codecID.contains("ASS") || track.codecID.contains("SSA") ? .ass : .srt)
+    }
+
+    private static func code(_ language: String?) -> String? {
+        Language.short(for: language)?.lowercased()
+    }
+
+    private func openReader() -> MatroskaSubtitleReader? {
+        if let reader { return reader }
+        guard !failed else { return nil }
+        do {
+            reader = try MatroskaSubtitleReader(url: url)
+        } catch {
+            failed = true
+        }
+        return reader
     }
 }

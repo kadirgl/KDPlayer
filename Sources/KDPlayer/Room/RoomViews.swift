@@ -244,8 +244,10 @@ struct ReadyCheckView: View {
             }
             .foregroundStyle(Overlay.text)
             .padding(26)
-            .frame(width: 640)
+            .frame(maxWidth: 640)
             .overlayGlass(radius: 30)
+            .padding(.horizontal, 16)
+            .fittingVertically()
             .frame(maxHeight: .infinity)
         }
         .onChange(of: readyCount) { session.maybeStartWhenAllReady() }

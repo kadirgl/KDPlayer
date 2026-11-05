@@ -62,6 +62,9 @@ final class PlayerController: NSObject {
     @ObservationIgnored private var lastReport: (time: Double, at: CFTimeInterval)?
     /// Yeni dosya "açılıyor" olayını verene kadar gelen zaman olayları önceki dosyadan kalmadır.
     @ObservationIgnored private var awaitingOpen = false
+    /// 50+ parçalı dosyalarda her "parça eklendi" olayında listeyi yeniden kurmamak için.
+    @ObservationIgnored private var tracksRefreshScheduled = false
+    @ObservationIgnored private var lastTrackCheck: CFTimeInterval = 0
     /// libVLC örneği ilk kullanımda oluşur (~50 ms); açılışta pencere çizildikten sonra `warmUp()` ile ısıtılır.
     @ObservationIgnored lazy var mediaPlayer: VLCMediaPlayer = {
         var options = [
@@ -70,8 +73,11 @@ final class PlayerController: NSObject {
             "--no-osd",
             "--no-snapshot-preview",
         ]
+        // Gömülü metin altyazıları biz çizeriz; VLC yalnızca okuyamadıklarımızı (MP4 metin, dizinsiz yavaş
+        // dosyalar) çizer. Onlar da en azından boyut ve renk tercihine uysun.
         let scale = UserDefaults.standard.integer(forKey: SettingsKey.embeddedSubtitleScale)
         if scale > 0 { options.append("--sub-text-scale=\(scale)") }
+        options.append("--freetype-color=\(SubtitleStyleStore.shared.style.color.rgb)")
         let player = VLCMediaPlayer(options: options)
         player.delegate = self
         return player
@@ -103,6 +109,8 @@ final class PlayerController: NSObject {
         duration = 0
         audioTracks = []
         embeddedSubtitles = []
+        currentEmbeddedSubtitleID = -1
+        currentAudioID = -1
         chapters = []
         videoTrack = nil
         videoSize = .zero
@@ -272,6 +280,46 @@ final class PlayerController: NSObject {
 
     // MARK: Parça bilgisi
 
+    /// Remux'larda her parça başlığında tekrar eden sürüm grubu etiketi ("BTM SDH", "BTM DD 5.1 LA") atılır.
+    private static func stripCommonTag(_ audio: inout [MediaTrack], _ subtitles: inout [MediaTrack]) {
+        let all = audio + subtitles
+        guard all.count >= 4 else { return }
+        let firstWords = all.compactMap { $0.trackDescription?.split(separator: " ").first.map(String.init) }
+        guard let tag = Dictionary(grouping: firstWords, by: { $0 }).max(by: { $0.value.count < $1.value.count })?.key,
+              Double(firstWords.filter { $0 == tag }.count) >= Double(all.count) * 0.7, Language.guess(from: tag) == nil else { return }
+        func strip(_ track: inout MediaTrack) {
+            guard let description = track.trackDescription, description.hasPrefix(tag) else { return }
+            let rest = description.dropFirst(tag.count).trimmingCharacters(in: .whitespaces)
+            track.trackDescription = rest.isEmpty ? nil : rest
+        }
+        for index in audio.indices { strip(&audio[index]) }
+        for index in subtitles.indices { strip(&subtitles[index]) }
+    }
+
+    private func scheduleTrackRefresh() {
+        guard !tracksRefreshScheduled else { return }
+        tracksRefreshScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            self.tracksRefreshScheduled = false
+            self.refreshTracks()
+        }
+    }
+
+    /// VLC parçaları açılıştan sonra seçer (varsayılan ses, "default" işaretli altyazı): saniyede bir
+    /// eşitlenir. Ses VLC'nin seçimine uyar; altyazıyı ise altyazı servisi belirler, VLC kendi başına
+    /// (iri ve stilsiz) bir parça açmasın.
+    private func syncSelectedTracks() {
+        let now = CACurrentMediaTime()
+        guard now - lastTrackCheck > 1 else { return }
+        lastTrackCheck = now
+        let audio = mediaPlayer.currentAudioTrackIndex
+        if audio != currentAudioID { currentAudioID = audio }
+        if mediaPlayer.currentVideoSubTitleIndex != currentEmbeddedSubtitleID {
+            mediaPlayer.currentVideoSubTitleIndex = currentEmbeddedSubtitleID
+        }
+    }
+
     private func refreshTracks() {
         guard let media = mediaPlayer.media else { return }
         let infos = (media.tracksInformation as? [[String: Any]]) ?? []
@@ -290,11 +338,19 @@ final class PlayerController: NSObject {
             return MediaTrack(id: id, kind: .subtitle, vlcName: name, info: infos.first { ($0[VLCMediaTracksInformationId] as? NSNumber)?.int32Value == id })
         }
 
+        Self.stripCommonTag(&audioTracks, &embeddedSubtitles)
+
         if let info = infos.first(where: { ($0[VLCMediaTracksInformationType] as? String) == VLCMediaTracksInformationTypeVideo }) {
             videoTrack = MediaTrack(id: -1, kind: .video, vlcName: "", info: info)
         }
         currentAudioID = mediaPlayer.currentAudioTrackIndex
-        currentEmbeddedSubtitleID = mediaPlayer.currentVideoSubTitleIndex
+        // Altyazı seçimi altyazı servisinin: VLC'nin "default" parçayı kendiliğinden açması benimsenmez.
+        if currentEmbeddedSubtitleID >= 0, !embeddedSubtitles.contains(where: { $0.id == currentEmbeddedSubtitleID }) {
+            currentEmbeddedSubtitleID = -1
+        }
+        if mediaPlayer.currentVideoSubTitleIndex != currentEmbeddedSubtitleID {
+            mediaPlayer.currentVideoSubTitleIndex = currentEmbeddedSubtitleID
+        }
         videoSize = mediaPlayer.videoSize
 
         let descriptions = (mediaPlayer.chapterDescriptions(ofTitle: mediaPlayer.currentTitleIndex) as? [[String: Any]]) ?? []
@@ -344,7 +400,7 @@ extension PlayerController: VLCMediaPlayerDelegate {
         case .error:
             state = .error(VLCLibrary.currentErrorMessage ?? "Dosya açılamadı")
         case .esAdded:
-            refreshTracks()
+            scheduleTrackRefresh()
         @unknown default:
             break
         }
@@ -392,6 +448,7 @@ extension PlayerController: VLCMediaPlayerDelegate {
             #endif
         }
         if !hasStarted, reported > 0 { hasStarted = true }
+        syncSelectedTracks()
         onTimeChanged?(time)
     }
 }
@@ -418,7 +475,7 @@ struct MediaTrack: Identifiable, Equatable {
         self.kind = kind
         self.vlcName = vlcName
         if let info {
-            language = (info[VLCMediaTracksInformationLanguage] as? String).flatMap { $0.isEmpty || Language.undefined.contains($0.lowercased()) ? nil : $0 }
+            language = (info[VLCMediaTracksInformationLanguage] as? String).flatMap { $0.isEmpty || Language.undefined.contains($0.lowercased()) ? nil : Language.code(for: $0) }
             if let fourcc = (info[VLCMediaTracksInformationCodec] as? NSNumber)?.uint32Value {
                 codec = MediaTrack.fourCC(fourcc)
             }
@@ -446,6 +503,10 @@ struct MediaTrack: Identifiable, Equatable {
     var cleanedName: String {
         var name = vlcName
         if let range = name.range(of: #"^(Track|Parça|Piste)\s*\d+\s*-?\s*"#, options: .regularExpression) {
+            name.removeSubrange(range)
+        }
+        // "BTM DD 5.1 - [English]" → "BTM DD 5.1"
+        if let range = name.range(of: #"\s*-?\s*\[[^\]]*\]\s*$"#, options: .regularExpression), range.lowerBound > name.startIndex {
             name.removeSubrange(range)
         }
         name = name.trimmingCharacters(in: CharacterSet(charactersIn: "[] -"))
@@ -495,17 +556,43 @@ struct MediaTrack: Identifiable, Equatable {
             if let channelLabel { parts.append(channelLabel) }
             if let codec { parts.append(codec) }
             if let bitrate, bitrate > 0 { parts.append("\(bitrate * 8 / 1000) kbps") }
+            if let label = extraLabel { parts.append(label) }
             return parts.joined(separator: " · ")
         case .subtitle:
-            if isForced { return "Sadece yabancı dildeki konuşmalar" }
-            if isImageSubtitle { return "Görüntü (\(codec ?? "PGS")) · stil değiştirilemez" }
-            return "Metin (\(codec ?? "SRT"))"
+            var base: String
+            if isForced {
+                base = "Sadece yabancı dildeki konuşmalar"
+            } else if isImageSubtitle {
+                base = "Görüntü (\(codec ?? "PGS")) · stil değiştirilemez"
+            } else {
+                base = "Metin (\(codec ?? "SRT"))"
+            }
+            if let label = extraLabel { base += " · \(label)" }
+            return base
         case .video:
             var parts: [String] = []
             if let height { parts.append("\(height)p") }
             if let codec { parts.append(codec) }
             return parts.joined(separator: " ")
         }
+    }
+
+    /// Parçanın kendi başlığı ("SDH", "LA", "Atmos"): aynı dildeki parçaları ayırt etmek için.
+    /// Dil adını, codec'i ya da kanal düzenini tekrar eden kısımlar atılır.
+    var extraLabel: String? {
+        guard let raw = trackDescription?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        // Codec ve kanal bilgisi zaten yanında yazıyor: "DD 5.1 LA" → "LA", "TrueHD Atmos" → "Atmos".
+        let noise: Set<String> = ["dd", "dd+", "ddp", "dd5.1", "ac3", "eac3", "e-ac3", "truehd", "dts", "dts-hd", "dts-x", "ma", "hra",
+                                  "aac", "flac", "pcm", "lpcm", "opus", "mp3", "srt", "ass", "pgs", "sup", "subrip",
+                                  "1.0", "2.0", "5.1", "6.1", "7.1", "stereo", "mono", "-", "·", "|"]
+        let language = [languageName, language ?? "", Language.short(for: language) ?? ""].map { $0.lowercased(with: Format.turkish) }
+        let words = raw.split(whereSeparator: \.isWhitespace).map(String.init).filter { word in
+            let lower = word.lowercased(with: Format.turkish)
+            return !noise.contains(lower) && !language.contains(lower) && lower != codec?.lowercased()
+        }
+        guard !words.isEmpty else { return nil }
+        let label = words.joined(separator: " ")
+        return label.count > 28 ? String(label.prefix(27)) + "…" : label
     }
 
     /// Ses parçası başlığı: "English · Orijinal", "Türkçe · Dublaj".

@@ -30,7 +30,7 @@ struct PlayerView: View {
             let panelOpen = subtitlePanelOpen || roomPanelOpen
             let contentWidth = panelOpen ? size.width - Theme.panelWidth - 32 : size.width
             let videoRect = player.videoSize.aspectFit(in: size)
-            let showsSyncStrip = subtitlePanelOpen && session.panel != .appearance && session.subtitles.loaded != nil
+            let showsSyncStrip = subtitlePanelOpen && session.panel != .appearance && session.subtitles.activeDocument != nil
 
             ZStack(alignment: .topLeading) {
                 Color.black
@@ -57,7 +57,8 @@ struct PlayerView: View {
                     style: styleStore.style,
                     videoRect: videoRect,
                     containerSize: CGSize(width: contentWidth, height: size.height),
-                    bottomInset: showsChrome ? (showsSyncStrip ? 196 : 150) : 0
+                    // Senkron şeridi dar alanda iki satıra iner (≈ +50 pt).
+                    bottomInset: showsChrome || showsSyncStrip ? (showsSyncStrip ? (contentWidth < 620 ? 250 : 196) : 150) : 0
                 )
 
                 if !session.isMini {
@@ -106,7 +107,7 @@ struct PlayerView: View {
                             .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                     if session.tracksOpen && !session.isMini {
-                        TrackPopover(session: session)
+                        TrackPopover(session: session, maxWidth: contentWidth - (panelOpen ? 32 : 40), maxHeight: size.height - 250)
                             .transition(.scale(scale: 0.96, anchor: .bottomTrailing).combined(with: .opacity))
                     }
                     Group {
@@ -231,15 +232,13 @@ struct PlayerView: View {
             if session.inRoom {
                 RoomHeader(session: session).layoutPriority(-1)
             } else {
-                HStack(spacing: 10) {
-                    Text(session.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
-                    if !session.detailLine.isEmpty {
-                        Text(session.detailLine).font(.system(size: 12)).foregroundStyle(Overlay.secondary).lineLimit(1)
-                    }
+                // Dar pencerede önce ayrıntı satırı, sonra başlık kutusunun kendisi düşer (boş kapsül kalmasın).
+                ViewThatFits(in: .horizontal) {
+                    titlePill(detail: true)
+                    titlePill(detail: false)
+                    titlePill(detail: false).frame(maxWidth: 220)
+                    Color.clear.frame(width: 0, height: 44)
                 }
-                .padding(.horizontal, 16)
-                .frame(height: 44)
-                .glass(in: Capsule())
                 .layoutPriority(-1)
             }
 
@@ -252,10 +251,13 @@ struct PlayerView: View {
                     }
                 }
             } else {
-                Button { session.presentRoomSetup() } label: {
-                    Label("Oda kur", systemImage: "person.2")
+                ViewThatFits(in: .horizontal) {
+                    Button { session.presentRoomSetup() } label: {
+                        Label("Oda kur", systemImage: "person.2")
+                    }
+                    .buttonStyle(.kd(.glass, fontSize: 13))
+                    KDIconButton(systemName: "person.2", label: "Oda kur") { session.presentRoomSetup() }
                 }
-                .buttonStyle(.kd(.glass, fontSize: 13))
                 .help("Oda kur (⌘R)")
             }
 
@@ -263,6 +265,18 @@ struct PlayerView: View {
         }
         .foregroundStyle(Overlay.text)
         .onHover { session.hoveringControls = $0 }
+    }
+
+    private func titlePill(detail: Bool) -> some View {
+        HStack(spacing: 10) {
+            Text(session.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+            if detail, !session.detailLine.isEmpty {
+                Text(session.detailLine).font(.system(size: 12)).foregroundStyle(Overlay.secondary).lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 44)
+        .glass(in: Capsule())
     }
 
     // MARK: Jestler

@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 /// Ses ve altyazı parçaları (ekran 5): iki sütunlu popover.
 struct TrackPopover: View {
     @Bindable var session: PlayerSession
+    /// Pencerede kalan alan: 44 altyazılı, 12 sesli remux'larda liste kayar, popover taşmaz.
+    var maxWidth: CGFloat = 680
+    var maxHeight: CGFloat = .infinity
     @AppStorage(SettingsKey.rememberTrackLanguages) private var remember = true
 
     private var player: PlayerController { session.player }
@@ -11,51 +14,87 @@ struct TrackPopover: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            HStack(alignment: .top, spacing: 14) {
-                audioColumn.frame(maxWidth: .infinity, alignment: .top)
-                subtitleColumn.frame(maxWidth: .infinity, alignment: .top)
+            if compactHeight {
+                // Alçak pencere: listeler ayrı ayrı kayınca birkaç satıra iner; popover tek parça kayar.
+                ScrollView {
+                    columns.fixedSize(horizontal: false, vertical: true)
+                }
+                .scrollIndicators(.automatic)
+            } else {
+                columns.fixedSize(horizontal: false, vertical: !needsScrolling)
             }
             Divider().overlay(Color.white.opacity(0.1))
             HStack(spacing: 12) {
                 Toggle(isOn: $remember) {
                     (Text("Tüm filmlerde hatırla: ") + Text(rememberSummary).fontWeight(.semibold))
                         .font(.system(size: 12.5))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
                 .toggleStyle(.checkbox)
                 .tint(Theme.accent)
-                Spacer()
-                (Text("Kısayol: ") + Text("A").fontWeight(.semibold) + Text(" ses · ") + Text("S").fontWeight(.semibold) + Text(" altyazı"))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Overlay.tertiary)
+                .layoutPriority(1)
+                Spacer(minLength: 8)
+                if width > 600 {
+                    (Text("Kısayol: ") + Text("A").fontWeight(.semibold) + Text(" ses · ") + Text("S").fontWeight(.semibold) + Text(" altyazı"))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Overlay.tertiary)
+                        .fixedSize()
+                }
             }
             .padding(.horizontal, 4)
         }
         .foregroundStyle(Overlay.text)
         .padding(16)
-        .frame(width: 680)
+        .frame(width: width)
+        .frame(maxHeight: needsScrolling ? max(compactHeight ? 200 : 260, maxHeight) : nil)
         .overlayGlass(radius: 26)
         .onHover { session.hoveringControls = $0 }
         .onChange(of: player.currentAudioID) { rememberChoice() }
         .onChange(of: subtitles.loaded?.language) { rememberChoice() }
     }
 
+    private var columns: some View {
+        HStack(alignment: .top, spacing: 14) {
+            audioColumn.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            subtitleColumn.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    private var width: CGFloat { max(320, min(680, maxWidth)) }
+    private var narrow: Bool { width < 600 }
+    private var compactHeight: Bool { needsScrolling && maxHeight < 440 }
+    private var listsScroll: Bool { needsScrolling && !compactHeight }
+
+    /// Satırların tahmini yüksekliği pencereye sığmıyorsa listeler kendi içinde kayar.
+    private var needsScrolling: Bool {
+        let audio = 52 * CGFloat(max(1, player.audioTracks.count)) + 120
+        let subtitleRows = player.embeddedSubtitles.count + (subtitles.loaded != nil ? 1 : 0) + 1
+        let subtitle = 52 * CGFloat(subtitleRows) + 190
+        return max(audio, subtitle) + 90 > maxHeight
+    }
+
     // MARK: Ses
 
     private var audioColumn: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ColumnTitle(icon: "speaker.wave.2.fill", title: "Ses")
-            if player.audioTracks.isEmpty {
-                Text("Ses parçası yok").font(.system(size: 12.5)).foregroundStyle(Overlay.secondary).padding(12)
+            ColumnTitle(icon: "speaker.wave.2.fill", title: "Ses", count: player.audioTracks.count)
+            TrackList(scrolls: listsScroll) {
+                if player.audioTracks.isEmpty {
+                    Text("Ses parçası yok").font(.system(size: 12.5)).foregroundStyle(Overlay.secondary).padding(12)
+                }
+                ForEach(player.audioTracks) { track in
+                    KDOptionRow(
+                        title: track.audioTitle,
+                        meta: track.meta.isEmpty ? nil : track.meta,
+                        badge: track.isCommentary ? "Yorum" : nil,
+                        selected: track.id == player.currentAudioID,
+                        dimmed: track.isUnsupported
+                    ) { player.selectAudio(track.id) }
+                    .id(track.id)
+                }
             }
-            ForEach(player.audioTracks) { track in
-                KDOptionRow(
-                    title: track.audioTitle,
-                    meta: track.meta.isEmpty ? nil : track.meta,
-                    badge: track.isCommentary ? "Yorum" : nil,
-                    selected: track.id == player.currentAudioID,
-                    dimmed: track.isUnsupported
-                ) { player.selectAudio(track.id) }
-            }
+            .scrollTarget(player.currentAudioID)
 
             VStack(spacing: 10) {
                 HStack {
@@ -75,39 +114,45 @@ struct TrackPopover: View {
 
     private var subtitleColumn: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ColumnTitle(icon: "captions.bubble.fill", title: "Altyazı")
-            KDOptionRow(title: "Kapalı", selected: !subtitles.enabled || !subtitles.hasSubtitle, titleWeight: .medium) {
-                subtitles.turnOff()
-            }
-            if !player.embeddedSubtitles.isEmpty {
-                SectionLabel("Dosyanın içinde")
-                ForEach(player.embeddedSubtitles) { track in
+            ColumnTitle(icon: "captions.bubble.fill", title: "Altyazı", count: player.embeddedSubtitles.count)
+            TrackList(scrolls: listsScroll) {
+                KDOptionRow(title: "Kapalı", selected: !subtitles.enabled || !subtitles.hasSubtitle, titleWeight: .medium) {
+                    subtitles.turnOff()
+                }
+                .id(Int32(-1))
+                if let loaded = subtitles.loaded {
+                    SectionLabel(loaded.source == .openSubtitles ? "İnternetten" : "Harici")
                     KDOptionRow(
-                        title: track.isForced ? "\(track.languageName) · Zorunlu" : track.languageName,
-                        meta: track.meta,
-                        badge: track.isForced ? "Forced" : nil,
-                        selected: subtitles.enabled && subtitles.embeddedTrackID == track.id
-                    ) { subtitles.selectEmbedded(track) }
+                        title: "\(Language.name(for: loaded.language) ?? "Altyazı") · \(loaded.source.title)",
+                        meta: loaded.score.map { "%\($0) eşleşme · \(loaded.name)" } ?? loaded.name,
+                        selected: subtitles.enabled
+                    ) { subtitles.turnOn() }
+                }
+                if !player.embeddedSubtitles.isEmpty {
+                    SectionLabel("Dosyanın içinde")
+                    ForEach(session.sortedEmbeddedSubtitles) { track in
+                        KDOptionRow(
+                            title: track.isForced ? "\(track.languageName) · Zorunlu" : track.languageName,
+                            meta: track.meta,
+                            badge: track.isForced ? "Forced" : nil,
+                            selected: subtitles.enabled && subtitles.embeddedTrackID == track.id
+                        ) { subtitles.selectEmbedded(track) }
+                        .id(track.id)
+                    }
                 }
             }
-            if let loaded = subtitles.loaded {
-                SectionLabel(loaded.source == .openSubtitles ? "İnternetten" : "Harici")
-                KDOptionRow(
-                    title: "\(Language.name(for: loaded.language) ?? "Altyazı") · \(loaded.source.title)",
-                    meta: loaded.score.map { "%\($0) eşleşme · \(loaded.name)" } ?? loaded.name,
-                    selected: subtitles.enabled
-                ) { subtitles.turnOn() }
-            }
+            .scrollTarget(subtitles.enabled ? subtitles.embeddedTrackID : nil)
+
             HStack(spacing: 6) {
                 Button {
                     session.tracksOpen = false
                     session.togglePanel(.find)
                 } label: {
-                    Label("Daha fazla ara", systemImage: "magnifyingglass")
+                    Label(narrow ? "Ara" : "Daha fazla ara", systemImage: "magnifyingglass")
                 }
                 .buttonStyle(.kd(.glass, fontSize: 12.5, fullWidth: true))
                 Button { pickSubtitle(secondary: false) } label: {
-                    Label("Dosyadan ekle", systemImage: "doc.badge.plus")
+                    Label(narrow ? "Dosya" : "Dosyadan ekle", systemImage: "doc.badge.plus")
                 }
                 .buttonStyle(.kd(.glass, fontSize: 12.5, fullWidth: true))
             }
@@ -172,13 +217,63 @@ struct TrackPopover: View {
 private struct ColumnTitle: View {
     let icon: String
     let title: String
+    var count = 0
 
     var body: some View {
-        Label(title, systemImage: icon)
-            .font(.system(size: 15, weight: .semibold))
-            .padding(.horizontal, 12)
-            .padding(.top, 2)
-            .padding(.bottom, 6)
+        HStack(spacing: 6) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 15, weight: .semibold))
+            if count > 3 {
+                Text("\(count)").font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(Overlay.secondary)
+                    .padding(.horizontal, 7).frame(height: 18)
+                    .background(Capsule().fill(Overlay.raised))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 2)
+        .padding(.bottom, 6)
+    }
+}
+
+/// Parça listesi: sığıyorsa düz, sığmıyorsa kendi içinde kayan liste (seçili satır görünür tutulur).
+private struct TrackList<Content: View>: View {
+    let scrolls: Bool
+    @ViewBuilder let content: Content
+    private var target: Int32?
+
+    init(scrolls: Bool, @ViewBuilder content: () -> Content) {
+        self.scrolls = scrolls
+        self.content = content()
+    }
+
+    func scrollTarget(_ id: Int32?) -> Self {
+        var copy = self
+        copy.target = id
+        return copy
+    }
+
+    var body: some View {
+        if scrolls {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) { content }
+                        .padding(.trailing, 4)
+                }
+                .scrollIndicators(.automatic)
+                .mask(
+                    LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.03),
+                                           .init(color: .black, location: 0.95), .init(color: .clear, location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+                .onAppear {
+                    if let target { proxy.scrollTo(target, anchor: .center) }
+                }
+            }
+            .frame(maxHeight: .infinity)
+        } else {
+            VStack(alignment: .leading, spacing: 2) { content }
+        }
     }
 }
 

@@ -483,11 +483,31 @@ final class PlayerSession {
         toasts.show("Ses: \(track.audioTitle)", subtitle: track.meta)
     }
 
-    /// S: kapalı → gömülü metin parçaları → harici altyazı → kapalı.
+    /// Gömülü altyazılar: tercih edilen diller (Ayarlar › Altyazı dilleri) üstte, gerisi dosyadaki sırayla.
+    /// 40+ altyazılı remux'larda Türkçe listenin sonunda kalmasın.
+    var sortedEmbeddedSubtitles: [MediaTrack] {
+        let preferred = subtitles.preferredLanguages
+        return player.embeddedSubtitles.enumerated().sorted { lhs, rhs in
+            let left = lhs.element.languageCode.flatMap { preferred.firstIndex(of: $0) } ?? preferred.count
+            let right = rhs.element.languageCode.flatMap { preferred.firstIndex(of: $0) } ?? preferred.count
+            if left != right { return left < right }
+            if lhs.element.isForced != rhs.element.isForced { return !lhs.element.isForced }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+
+    /// S: kapalı → gömülü parçalar (tercih edilen dillerdekiler; yoksa hepsi) → harici altyazı → kapalı.
     func cycleSubtitle() {
         enum Option: Equatable { case off, embedded(MediaTrack), external }
         var options: [Option] = [.off]
-        options += player.embeddedSubtitles.map { .embedded($0) }
+        let preferred = subtitles.preferredLanguages
+        var embedded = sortedEmbeddedSubtitles.filter { $0.languageCode.map(preferred.contains) ?? false }
+        if embedded.isEmpty { embedded = player.embeddedSubtitles }
+        if let id = subtitles.embeddedTrackID, !embedded.contains(where: { $0.id == id }),
+           let current = player.embeddedSubtitles.first(where: { $0.id == id }) {
+            embedded.insert(current, at: 0)
+        }
+        options += embedded.map { .embedded($0) }
         if subtitles.loaded != nil { options.append(.external) }
         let current: Option = if !subtitles.enabled { .off } else if let id = subtitles.embeddedTrackID, let track = player.embeddedSubtitles.first(where: { $0.id == id }) { .embedded(track) } else if subtitles.loaded != nil { .external } else { .off }
         let index = options.firstIndex(of: current) ?? 0
@@ -641,7 +661,7 @@ final class PlayerSession {
 
         switch event.keyCode {
         case 49: // Space
-            if listeningForSpeech, subtitles.loaded != nil {
+            if listeningForSpeech, subtitles.activeDocument != nil {
                 if subtitles.markSpeech(at: player.time) {
                     hud.show(.subtitleDelay(ms: subtitles.timing.offsetMilliseconds))
                 }

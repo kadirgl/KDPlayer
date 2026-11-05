@@ -63,6 +63,21 @@ final class AppModel {
         window?.makeKeyAndOrderFront(nil)
         #if DEBUG
         debugRoomHooks()
+        // Ekran görüntüsü için belirli ana sar: KD_DEBUG_SEEK=142 (oda testinden bağımsız).
+        if let seek = ProcessInfo.processInfo.environment["KD_DEBUG_SEEK"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [session] in
+                if session.resumePrompt != nil { session.resume(fromStart: false) }
+                session.player.seek(to: seek)
+            }
+        }
+        // Küçük pencere denemesi: KD_DEBUG_SIZE=640x400
+        if let raw = ProcessInfo.processInfo.environment["KD_DEBUG_SIZE"] {
+            let parts = raw.split(separator: "x").compactMap { Double($0) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                guard parts.count == 2, let window = self?.window else { return }
+                window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - parts[1], width: parts[0], height: parts[1]), display: true)
+            }
+        }
         // Ekran görüntüsü için: KD_DEBUG_UI=find|sync|appearance|tracks
         if let ui = ProcessInfo.processInfo.environment["KD_DEBUG_UI"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [session] in

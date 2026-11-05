@@ -103,6 +103,19 @@ enum Language {
         return map[code] ?? Locale(identifier: "tr_TR").localizedString(forLanguageCode: code)?.capitalized(with: Format.turkish)
     }
 
+    /// VLC bazen kodu değil adı verir ("English"): ISO koduna çevirir; kod zaten geçerliyse aynen döner.
+    static func code(for value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count > 3 else { return trimmed }
+        if let guessed = guess(from: trimmed) { return guessed }
+        let english = Locale(identifier: "en")
+        let lower = trimmed.lowercased()
+        for code in Locale.LanguageCode.isoLanguageCodes.map(\.identifier) where code.count == 2 {
+            if english.localizedString(forLanguageCode: code)?.lowercased() == lower { return code }
+        }
+        return trimmed
+    }
+
     /// Kısa gösterim: "EN", "TR".
     static func short(for code: String?) -> String? {
         guard let code = code?.lowercased(), !code.isEmpty, !undefined.contains(code) else { return nil }

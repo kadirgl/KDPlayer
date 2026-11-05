@@ -127,8 +127,10 @@ struct ErrorCard: View {
         }
         .foregroundStyle(Overlay.text)
         .padding(24)
-        .frame(width: 520)
+        .frame(maxWidth: 520)
         .overlayGlass(radius: 28)
+        .padding(16)
+        .fittingVertically()
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
     }

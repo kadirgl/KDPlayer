@@ -83,6 +83,15 @@ struct SubtitleStyle: Codable, Equatable {
             case .lightGreen: "Açık yeşil"
             }
         }
+        /// VLC'nin metin çizicisi için 0xRRGGBB.
+        var rgb: Int {
+            switch self {
+            case .white: 0xFFFFFF
+            case .yellow: 0xFFE45C
+            case .lightBlue: 0xA9DCFF
+            case .lightGreen: 0xB7F0C4
+            }
+        }
         var color: Color {
             switch self {
             case .white: .white
