@@ -8,8 +8,9 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 
-# VLCKit (scripts/fetch-vlckit.sh indirir)
+# VLCKit (scripts/fetch-vlckit.sh indirir ya da scripts/build-vlckit.sh derler)
 Vendor/VLCKit.xcframework/
+Vendor/VLCKit.source
 
 # Paketleme çıktısı
 dist/

@@ -80,6 +80,14 @@ final class PlayerController: NSObject {
         options.append("--freetype-color=\(SubtitleStyleStore.shared.style.color.rgb)")
         let player = VLCMediaPlayer(options: options)
         player.delegate = self
+        #if DEBUG
+        // Teşhis: KD_VLC_LOG=1 libVLC günlüğünü stderr'e yazar.
+        if ProcessInfo.processInfo.environment["KD_VLC_LOG"] != nil {
+            let logger = VLCConsoleLogger()
+            logger.level = .debug
+            player.libraryInstance.loggers = [logger]
+        }
+        #endif
         return player
     }()
     @ObservationIgnored var onEnded: (() -> Void)?
@@ -534,8 +542,9 @@ struct MediaTrack: Identifiable, Equatable {
         return ["PGS", "VobSub", "DVB"].contains(codec)
     }
 
-    /// Bu Mac'te çalınamayan ses codec'i (libVLC 3 TrueHD/MLP'yi her zaman çözemiyor).
-    var isUnsupported: Bool { false }
+    /// Gömülü VLCKit'in çözemediği ses codec'i. VideoLAN'ın hazır VLCKit paketinde FFmpeg TrueHD/MLP'siz
+    /// derlenir ("codec not found (TrueHD Audio)"); `scripts/build-vlckit.sh` ile derlenen pakette çözücü vardır.
+    var isUnsupported: Bool { kind == .audio && codec == "TrueHD" && !CodecSupport.trueHD }
 
     var channelLabel: String? {
         guard let channels, channels > 0 else { return nil }
