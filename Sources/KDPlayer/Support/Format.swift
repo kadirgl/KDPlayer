@@ -2,6 +2,21 @@ import Foundation
 
 /// Türkçe biçimlendirme yardımcıları (süre, hız, gecikme).
 enum Format {
+    /// NumberFormatter oluşturmak pahalı; kontrol çubuğu saniyede birkaç kez çağırır.
+    private static let decimal2: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "tr_TR")
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+    private static let decimal1: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "tr_TR")
+        formatter.maximumFractionDigits = 1
+        return formatter
+    }()
+
     /// 1:04:12 ya da 4:12.
     static func time(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
@@ -13,6 +28,11 @@ enum Format {
     /// Kalan süre: −57:21.
     static func remaining(_ seconds: Double) -> String { "−" + time(max(0, seconds)) }
 
+    /// "48 dk kaldı" · "1 dk'dan az kaldı"
+    static func remainingText(_ seconds: Double) -> String {
+        seconds < 60 ? "1 dk'dan az kaldı" : "\(duration(seconds)) kaldı"
+    }
+
     /// 2 sa 1 dk · 48 dk.
     static func duration(_ seconds: Double) -> String {
         let minutes = Int((seconds / 60).rounded())
@@ -23,11 +43,7 @@ enum Format {
 
     /// 1× · 1,25× · 0,5×.
     static func rate(_ rate: Float) -> String {
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "tr_TR")
-        formatter.minimumFractionDigits = 0
-        formatter.maximumFractionDigits = 2
-        return (formatter.string(from: NSNumber(value: rate)) ?? "\(rate)") + "×"
+        (decimal2.string(from: NSNumber(value: rate)) ?? "\(rate)") + "×"
     }
 
     /// +300 ms · −1,2 sn · 0 ms.
@@ -36,10 +52,7 @@ enum Format {
         let sign = ms > 0 ? "+" : "−"
         let value = abs(ms)
         if value >= 10_000 {
-            let formatter = NumberFormatter()
-            formatter.locale = Locale(identifier: "tr_TR")
-            formatter.maximumFractionDigits = 1
-            return sign + (formatter.string(from: NSNumber(value: Double(value) / 1000)) ?? "") + " sn"
+            return sign + (decimal1.string(from: NSNumber(value: Double(value) / 1000)) ?? "") + " sn"
         }
         return "\(sign)\(value) ms"
     }
@@ -47,9 +60,7 @@ enum Format {
     /// 12,4 B (bin) indirme.
     static func count(_ value: Int) -> String {
         if value < 1000 { return "\(value)" }
-        let formatter = NumberFormatter()
-        formatter.locale = Locale(identifier: "tr_TR")
-        formatter.maximumFractionDigits = 1
+        let formatter = decimal1
         if value < 1_000_000 { return (formatter.string(from: NSNumber(value: Double(value) / 1000)) ?? "") + " B" }
         return (formatter.string(from: NSNumber(value: Double(value) / 1_000_000)) ?? "") + " Mn"
     }

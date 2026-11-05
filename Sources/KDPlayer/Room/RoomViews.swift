@@ -18,7 +18,9 @@ struct RoomSetupSheet: View {
     var body: some View {
         ZStack {
             Color.black.opacity(0.55).onTapGesture { close() }
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(spacing: 16) {
+                // Kısa pencerede form kayar; butonlar her zaman görünür.
+                VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Oda kur").font(.system(size: 22, weight: .semibold)).tracking(-0.3)
                     Text("Herkes filmi kendi bilgisayarından izler. Odada sadece oynatma, altyazı ve sohbet paylaşılır.")
@@ -94,6 +96,9 @@ struct RoomSetupSheet: View {
                 .padding(.trailing, 8)
                 .frame(height: 56)
                 .glass(radius: 18)
+                }
+                .padding([.horizontal, .top], 24)
+                .fittingVertically()
 
                 HStack(spacing: 10) {
                     Spacer()
@@ -116,11 +121,12 @@ struct RoomSetupSheet: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(working)
                 }
+                .padding([.horizontal, .bottom], 24)
             }
             .foregroundStyle(Overlay.text)
-            .padding(24)
             .frame(width: 540)
             .overlayGlass(radius: 30)
+            .padding(.vertical, 16)
             .scaleEffect(appeared ? 1 : 0.96)
             .opacity(appeared ? 1 : 0)
         }
@@ -141,7 +147,17 @@ struct RoomSetupSheet: View {
     }
 
     private func close() {
-        withAnimation(Theme.spring) { session.roomSetupVisible = false }
+        session.cancelRoomSetup()
+    }
+}
+
+extension View {
+    /// Pencereye sığmazsa kaydırılabilir olur (kısa pencerede yazılar kırpılmasın).
+    func fittingVertically() -> some View {
+        ViewThatFits(in: .vertical) {
+            self
+            ScrollView { self }.scrollIndicators(.never)
+        }
     }
 }
 
@@ -153,7 +169,7 @@ struct MediaThumb: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         Group {
-            if let url, let image = NSImage(contentsOf: url) {
+            if let url, let image = ThumbnailCache.image(for: url) {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
                 Palette.gradient(for: seed)

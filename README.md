@@ -9,12 +9,25 @@ Tasarım: *KD Player – Liquid Glass* canvas'ı · Davranış: *KD Player – G
 ```bash
 scripts/fetch-vlckit.sh          # VLCKit 3.7.3'ü VideoLAN'dan Vendor/ altına indirir (bir kez, ~85 MB)
 scripts/package-app.sh --debug --run   # dist/KDPlayer.app oluşturup açar
-scripts/package-app.sh           # release paketi
+scripts/package-app.sh           # release paketi (evrensel: Apple Silicon + Intel)
+VERSION=0.1.0 scripts/package-app.sh --dmg   # ayrıca dist/KDPlayer-0.1.0.dmg
 scripts/test.sh                  # birim testleri
 ```
 
+### UI turu ve performans ölçümü
+
+`scripts/package-app.sh --profile` optimize edilmiş ama test kancaları açık bir paket üretir (dağıtılmaz):
+
+- `open -n --env KD_UITEST=<video> --env KD_UITEST_LOG=tur.log dist/KDPlayer.app` — her ekranı sırayla açar,
+  kısayolları gerçek klavye olaylarıyla dener; günlüğe `STEP` (ekran görüntüsü anı) ve `CHECK ok/FAIL` yazar.
+- `KD_PERFTEST=<video>` — boşta / oynarken / panel açıkken CPU, bellek, saniyedeki yeniden çizim sayısı,
+  açılış süresi ve aç-kapat döngüsünde bellek (`PERF` satırları).
+
 `swift build` tek başına da derler, ama VLCKit'in kurulum adı `@loader_path/../Frameworks` olduğu için
 uygulamayı paket (`dist/KDPlayer.app`) olarak çalıştırın.
+
+Paket yerel (ad-hoc) imzalıdır; başka Mac'lerde ilk açılışta **Sistem Ayarları › Gizlilik ve Güvenlik › Yine de Aç**
+gerekir. Uyarısız dağıtım için Apple Developer ID imzası + notarization gerekir.
 
 ## Yapı
 

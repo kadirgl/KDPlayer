@@ -37,6 +37,8 @@ struct KDButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: fontSize, weight: .semibold))
             .lineLimit(1)
+            // Dar ya da kısa alanda yazı kırpılmasın ("Kap…", "Odayı…").
+            .fixedSize(horizontal: !fullWidth, vertical: true)
             .padding(.horizontal, height * 0.4)
             .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: height)
             .foregroundStyle(variant == .primary ? Theme.onAccent : Theme.textPrimary)
@@ -135,6 +137,7 @@ struct KDPillStyle: ButtonStyle {
             .font(.system(size: fontSize, weight: .semibold))
             .monospacedDigit()
             .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, height >= 40 ? 14 : 12)
             .frame(height: height)
             .foregroundStyle(Theme.textPrimary)

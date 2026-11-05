@@ -16,7 +16,7 @@ struct SettingsView: View {
         }
     }
 
-    @State private var tab: Tab = .general
+    @Bindable private var router = SettingsRouter.shared
     @State private var window: NSWindow?
 
     var body: some View {
@@ -29,10 +29,10 @@ struct SettingsView: View {
                     .padding(.leading, 4)
             }
             .frame(height: 28)
-            KDSegmented(selection: $tab, options: Tab.allCases.map { ($0, $0.title) })
+            KDSegmented(selection: $router.tab, options: Tab.allCases.map { ($0, $0.title) })
             ScrollView {
                 Group {
-                    switch tab {
+                    switch router.tab {
                     case .general: GeneralSettings()
                     case .subtitles: SubtitleSettings()
                     case .room: RoomSettings()
@@ -58,6 +58,13 @@ struct SettingsView: View {
         })
         .ignoresSafeArea()
     }
+}
+
+/// Ayarlar'da açık sekme (başka yerlerden belirli sekmeyi açmak için).
+@Observable
+final class SettingsRouter {
+    static let shared = SettingsRouter()
+    var tab: SettingsView.Tab = .general
 }
 
 // MARK: - Ortak

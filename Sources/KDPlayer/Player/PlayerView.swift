@@ -17,7 +17,13 @@ struct PlayerView: View {
     private var showsChrome: Bool { session.controlsVisible && !session.isMini }
 
     var body: some View {
+        #if DEBUG
+        let _ = PerfCounters.playerView += 1
+        #endif
         GeometryReader { proxy in
+            #if DEBUG
+            let _ = PerfCounters.playerContent += 1
+            #endif
             let size = proxy.size
             let subtitlePanelOpen = session.panel != nil && !session.isMini
             let roomPanelOpen = !subtitlePanelOpen && session.showsRoomPanel && session.inRoom && !session.isMini
@@ -30,6 +36,9 @@ struct PlayerView: View {
                 Color.black
                 VideoSurface(player: player)
                     .allowsHitTesting(false)
+                if !player.hasVideoFrame {
+                    Color.black.allowsHitTesting(false)
+                }
 
                 gestureLayer(size: size)
 
@@ -42,9 +51,9 @@ struct PlayerView: View {
                 .opacity(showsChrome ? 1 : 0)
                 .allowsHitTesting(false)
 
-                SubtitleOverlay(
-                    primary: session.subtitles.visibleCues(at: player.time),
-                    secondary: session.subtitles.visibleSecondaryCues(at: player.time),
+                // Zamanı yalnızca bu küçük görünüm okur: oynatıcı ekranının tamamı her saniye yeniden kurulmaz.
+                SubtitleLayer(
+                    session: session,
                     style: styleStore.style,
                     videoRect: videoRect,
                     containerSize: CGSize(width: contentWidth, height: size.height),
@@ -331,14 +340,14 @@ struct PlayerView: View {
         guard let window = session.window, videoSize.width > 0, videoSize.height > 0,
               !window.styleMask.contains(.fullScreen), !session.isMini else { return }
         let screen = window.screen?.visibleFrame ?? .zero
-        var frame = window.frame
+        var frame = window.targetFrame
         let height = min(frame.width * videoSize.height / videoSize.width, screen.height > 0 ? screen.height : .infinity)
         let width = height * videoSize.width / videoSize.height
         guard abs(height - frame.height) > 2 else { return }
         frame.origin.y += frame.height - height
         frame.origin.x += (frame.width - width) / 2
         frame.size = CGSize(width: width, height: height)
-        window.setFrame(frame, display: true, animate: true)
+        window.animateFrame(to: frame)
     }
 
     private func removeMonitors() {
@@ -346,5 +355,28 @@ struct PlayerView: View {
         if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
         keyMonitor = nil
         scrollMonitor = nil
+    }
+}
+
+/// Oynatma zamanına bağlı altyazı katmanı. Yalnızca görünen satırlar değişince alttaki
+/// `SubtitleOverlay` yeniden çizilir (Equatable girdiler).
+private struct SubtitleLayer: View {
+    let session: PlayerSession
+    let style: SubtitleStyle
+    let videoRect: CGRect
+    let containerSize: CGSize
+    let bottomInset: CGFloat
+
+    var body: some View {
+        let time = session.player.time
+        SubtitleOverlay(
+            primary: session.subtitles.visibleCues(at: time),
+            secondary: session.subtitles.visibleSecondaryCues(at: time),
+            style: style,
+            videoRect: videoRect,
+            containerSize: containerSize,
+            bottomInset: bottomInset
+        )
+        .equatable()
     }
 }

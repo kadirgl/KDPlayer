@@ -137,7 +137,7 @@ final class SubtitleStyleStore {
 // MARK: - Video üzerindeki altyazı
 
 /// Bizim çizdiğimiz altyazı katmanı. İkinci altyazı birincilin üstünde %70 boyutta durur.
-struct SubtitleOverlay: View {
+struct SubtitleOverlay: View, Equatable {
     let primary: [SubtitleCue]
     let secondary: [SubtitleCue]
     let style: SubtitleStyle
@@ -148,6 +148,9 @@ struct SubtitleOverlay: View {
     let bottomInset: CGFloat
 
     var body: some View {
+        #if DEBUG
+        let _ = PerfCounters.subtitleOverlay += 1
+        #endif
         let scale = max(0.45, min(videoRect.height, containerSize.height) / 1080)
         let points = style.size.basePoints * scale
         let topCues = primary.filter(\.top)

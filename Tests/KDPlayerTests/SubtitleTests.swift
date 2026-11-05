@@ -49,6 +49,20 @@ struct SubtitleParserTests {
         #expect(document.cues(at: 10.1, timing: delayed).isEmpty)
         #expect(document.cues(at: 10.4, timing: delayed).map(\.text) == ["A"])
     }
+
+    @Test func rangeLookupMatchesLinearScan() throws {
+        var srt = ""
+        for i in 0..<300 { srt += "\(i + 1)\n\(SubtitleTests.ts(Double(i) * 3)) --> \(SubtitleTests.ts(Double(i) * 3 + 2))\nSatır \(i)\n\n" }
+        let document = try SubtitleParser.parse(srt)
+        let timing = SubtitleTiming(scale: 1.04, offset: 0.7)
+        for start in stride(from: -10.0, through: 950, by: 37) {
+            let range = start...(start + 30)
+            let expected = document.cues.filter {
+                timing.displayTime(for: $0.end) > range.lowerBound && timing.displayTime(for: $0.start) <= range.upperBound
+            }
+            #expect(document.cues(in: range, timing: timing).map(\.id) == expected.map(\.id))
+        }
+    }
 }
 
 @Suite("Karakter kodlaması")

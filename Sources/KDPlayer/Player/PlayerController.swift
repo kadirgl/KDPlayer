@@ -47,6 +47,10 @@ final class PlayerController: NSObject {
     private(set) var audioDelay: Int = 0
     /// Gömülü (VLC'nin çizdiği) altyazının gecikmesi (ms).
     private(set) var embeddedSubtitleDelay: Int = 0
+    /// Bu dosyadan ilk kare geldi mi (önceki dosyanın son karesi görünmesin diye).
+    private(set) var hasVideoFrame = false
+    /// Oynatma en az bir kez başladı mı (açılamayan dosyayı ayırt etmek için).
+    private(set) var hasStarted = false
     /// Parça listesi ilk kez dolduğunda artar (altyazı servisinin gömülü parça aramasını tetikler).
     private(set) var tracksRevision = 0
 
@@ -56,12 +60,10 @@ final class PlayerController: NSObject {
 
     /// Son zaman bildirimi (ara değerleme için): VLC zamanı ~250 ms'de bir bildirir.
     @ObservationIgnored private var lastReport: (time: Double, at: CFTimeInterval)?
-    @ObservationIgnored let mediaPlayer: VLCMediaPlayer
-    @ObservationIgnored var onEnded: (() -> Void)?
-    @ObservationIgnored var onTimeChanged: ((Double) -> Void)?
-    @ObservationIgnored var onStateChanged: ((State) -> Void)?
-
-    override init() {
+    /// Yeni dosya "açılıyor" olayını verene kadar gelen zaman olayları önceki dosyadan kalmadır.
+    @ObservationIgnored private var awaitingOpen = false
+    /// libVLC örneği ilk kullanımda oluşur (~50 ms); açılışta pencere çizildikten sonra `warmUp()` ile ısıtılır.
+    @ObservationIgnored lazy var mediaPlayer: VLCMediaPlayer = {
         var options = [
             "--no-video-title-show",   // dosya adını görüntüye yazma
             "--no-sub-autodetect-file", // yanındaki .srt'yi altyazı servisi yönetir
@@ -70,16 +72,31 @@ final class PlayerController: NSObject {
         ]
         let scale = UserDefaults.standard.integer(forKey: SettingsKey.embeddedSubtitleScale)
         if scale > 0 { options.append("--sub-text-scale=\(scale)") }
-        mediaPlayer = VLCMediaPlayer(options: options)
+        let player = VLCMediaPlayer(options: options)
+        player.delegate = self
+        return player
+    }()
+    @ObservationIgnored var onEnded: (() -> Void)?
+    @ObservationIgnored var onTimeChanged: ((Double) -> Void)?
+    @ObservationIgnored var onStateChanged: ((State) -> Void)?
+
+    override init() {
         super.init()
-        mediaPlayer.delegate = self
         volume = UserDefaults.standard.object(forKey: SettingsKey.volume) as? Int ?? 80
+    }
+
+    /// libVLC'yi önceden oluşturur (ilk dosya açılışı beklemesin).
+    func warmUp() {
+        _ = mediaPlayer
     }
 
     // MARK: Açma
 
     func open(_ url: URL, startAt seconds: Double? = nil) {
         stop()
+        #if DEBUG
+        PerfTimeline.mark("vlc.stopped")
+        #endif
         self.url = url
         state = .opening
         time = seconds ?? 0
@@ -88,6 +105,11 @@ final class PlayerController: NSObject {
         embeddedSubtitles = []
         chapters = []
         videoTrack = nil
+        videoSize = .zero
+        hasVideoFrame = false
+        hasStarted = false
+        awaitingOpen = true
+        lastReport = nil
         audioDelay = 0
         embeddedSubtitleDelay = 0
         rate = 1
@@ -101,6 +123,8 @@ final class PlayerController: NSObject {
         if let seconds, seconds > 1 {
             media.addOption(":start-time=\(seconds)")
         }
+        // Yerel dosyada VLC varsayılan 1000 ms önbellek doldurur; 300 ms açılışı ve sarmayı hızlandırır.
+        media.addOption(url.isFileURL ? ":file-caching=300" : ":network-caching=1000")
         mediaPlayer.media = media
         mediaPlayer.rate = 1
         applyVolume()
@@ -108,7 +132,7 @@ final class PlayerController: NSObject {
     }
 
     func stop() {
-        guard mediaPlayer.media != nil else { return }
+        guard url != nil, mediaPlayer.media != nil else { return }
         mediaPlayer.stop()
         isPlaying = false
         state = .idle
@@ -178,8 +202,13 @@ final class PlayerController: NSObject {
         applyVolume()
     }
 
+    /// Kullanıcının ses ayarına dokunmadan geçici sessizlik (devam et kartı arkasında ilk kare çözülürken).
+    var silenced = false {
+        didSet { applyVolume() }
+    }
+
     private func applyVolume() {
-        mediaPlayer.audio?.volume = Int32(muted ? 0 : volume)
+        mediaPlayer.audio?.volume = Int32(muted || silenced ? 0 : volume)
     }
 
     func setAudioDelay(_ ms: Int) {
@@ -294,11 +323,18 @@ extension PlayerController: VLCMediaPlayerDelegate {
         let previous = state
         switch mediaPlayer.state {
         case .opening:
+            awaitingOpen = false
             state = .opening
+            #if DEBUG
+            PerfTimeline.mark("vlc.opening")
+            #endif
         case .buffering:
             if !mediaPlayer.isPlaying && state != .paused { state = .buffering }
         case .playing:
             state = .playing
+            #if DEBUG
+            PerfTimeline.mark("vlc.playing")
+            #endif
         case .paused:
             state = .paused
         case .ended:
@@ -313,6 +349,13 @@ extension PlayerController: VLCMediaPlayerDelegate {
             break
         }
         isPlaying = mediaPlayer.isPlaying
+        // Yeni dosyanın video çıkışı oluştu: duraklatılmış ilk kare de görünsün.
+        if !hasVideoFrame, mediaPlayer.hasVideoOut, state == .playing || state == .paused {
+            hasVideoFrame = true
+            #if DEBUG
+            PerfTimeline.mark("vlc.firstFrame")
+            #endif
+        }
         if state == .playing, audioTracks.isEmpty && embeddedSubtitles.isEmpty {
             refreshTracks()
         }
@@ -324,6 +367,8 @@ extension PlayerController: VLCMediaPlayerDelegate {
     }
 
     func mediaPlayerTimeChanged(_ notification: Notification) {
+        // Kuyrukta bekleyen, önceki dosyaya ait olay (VLCKit son zamanı önbellekten verir).
+        guard !awaitingOpen else { return }
         let reported = Double(mediaPlayer.time.intValue) / 1000
         if let pendingSeek, let date = pendingSeekDate {
             // VLC sarmayı uygulayana kadar eski zamanı raporlayabilir.
@@ -340,6 +385,13 @@ extension PlayerController: VLCMediaPlayerDelegate {
         if duration <= 0 { updateDuration() }
         if !isPlaying && mediaPlayer.isPlaying { isPlaying = true }
         if videoSize == .zero, mediaPlayer.hasVideoOut { videoSize = mediaPlayer.videoSize }
+        if !hasVideoFrame, mediaPlayer.hasVideoOut, reported > 0 {
+            hasVideoFrame = true
+            #if DEBUG
+            PerfTimeline.mark("vlc.firstFrame")
+            #endif
+        }
+        if !hasStarted, reported > 0 { hasStarted = true }
         onTimeChanged?(time)
     }
 }

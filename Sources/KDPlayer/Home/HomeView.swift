@@ -18,6 +18,9 @@ struct HomeView: View {
     private var isFirstRun: Bool { continueItems.isEmpty }
 
     var body: some View {
+        #if DEBUG
+        let _ = PerfCounters.home += 1
+        #endif
         VStack(spacing: 16) {
             header
             dropZone
@@ -65,7 +68,7 @@ struct HomeView: View {
                 .foregroundStyle(Theme.textPrimary)
                 .padding(.leading, 4)
             Spacer()
-            SettingsLink {
+            Button { app.openSettings?() } label: {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.kdIcon())
@@ -206,7 +209,7 @@ private struct ContinueRow: View {
                     HStack(spacing: 8) {
                         Text(record.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                         Spacer(minLength: 0)
-                        Text("\(Format.duration(record.remaining)) kaldı")
+                        Text(Format.remainingText(record.remaining))
                             .font(.system(size: 12)).monospacedDigit()
                             .foregroundStyle(Theme.textSecondary)
                     }
@@ -247,7 +250,7 @@ private struct ContinueRow: View {
     @ViewBuilder private var thumbnail: some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         Group {
-            if let image = NSImage(contentsOf: record.thumbnailURL) {
+            if let image = ThumbnailCache.image(for: record.thumbnailURL) {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
                 Palette.gradient(for: record.fileHash)
@@ -256,5 +259,20 @@ private struct ContinueRow: View {
         .frame(width: 96, height: 56)
         .clipShape(shape)
         .overlay(shape.strokeBorder(.black.opacity(0.2), lineWidth: 0.5))
+    }
+}
+
+/// Küçük resimler her hover'da diskten okunmasın: dosya değişme tarihine göre bellekte tutulur.
+enum ThumbnailCache {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func image(for url: URL) -> NSImage? {
+        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
+        guard modified > 0 else { return nil }
+        let key = "\(url.path)#\(modified)" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = NSImage(contentsOf: url) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
     }
 }

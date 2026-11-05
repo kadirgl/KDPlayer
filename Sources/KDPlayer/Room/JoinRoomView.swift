@@ -69,11 +69,12 @@ struct JoinRoomView: View {
         .foregroundStyle(Theme.textPrimary)
         .padding(24)
         .frame(width: 560)
+        .fittingVertically()
 
         if onVideo {
-            content.overlayGlass(radius: 30)
+            content.overlayGlass(radius: 30).padding(.vertical, 16)
         } else {
-            content.windowGlass(radius: 30).shadow(color: Theme.shadow, radius: 30, y: 16)
+            content.windowGlass(radius: 30).shadow(color: Theme.shadow, radius: 30, y: 16).padding(.vertical, 16)
         }
     }
 

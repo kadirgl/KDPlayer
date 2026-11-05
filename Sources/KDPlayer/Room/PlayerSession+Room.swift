@@ -88,8 +88,16 @@ extension PlayerSession {
             toasts.show(Toast(kind: .warning, title: "İnternet bağlantısı yok", subtitle: "Oda kurmak için bağlantı gerekli"))
             return
         }
+        resumeAfterRoomSetup = player.isPlaying
         player.pause()
         withAnimation(Theme.spring) { roomSetupVisible = true; tracksOpen = false }
+    }
+
+    /// Oda kur sayfası vazgeçilerek kapandı: açılmadan önce oynuyorsa devam et.
+    func cancelRoomSetup() {
+        withAnimation(Theme.spring) { roomSetupVisible = false }
+        if resumeAfterRoomSetup, !inRoom { player.play() }
+        resumeAfterRoomSetup = false
     }
 
     var currentRoomMedia: RoomMedia {
@@ -109,10 +117,7 @@ extension PlayerSession {
 
     @MainActor
     func createRoom(name: String, controlMode: ControlMode, shareSubtitle: Bool, readyCheck: Bool, locked: Bool, code: String) async -> Bool {
-        if resumePrompt != nil {
-            countdownTask?.cancel()
-            resumePrompt = nil
-        }
+        if resumePrompt != nil { dismissResumePrompt() }
         do {
             let code = try await room.create(
                 name: name, controlMode: controlMode, readyCheck: readyCheck, locked: locked, media: currentRoomMedia,
@@ -140,10 +145,7 @@ extension PlayerSession {
     func joinRoom(code: String) async -> Bool {
         // Süre bilgisi gelene kadar bekle (dosya doğrulaması için).
         for _ in 0..<50 where player.duration <= 0 { try? await Task.sleep(for: .milliseconds(100)) }
-        if resumePrompt != nil {
-            countdownTask?.cancel()
-            resumePrompt = nil
-        }
+        if resumePrompt != nil { dismissResumePrompt() }
         do {
             try await room.join(code: code, displayName: displayName, durationMs: (player.duration * 1000).rounded(), fileHash: record?.fileHash)
             withAnimation(Theme.spring) {

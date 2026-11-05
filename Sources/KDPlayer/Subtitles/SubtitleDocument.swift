@@ -57,12 +57,16 @@ struct SubtitleDocument: Equatable, Sendable {
         return low < cues.count ? low : nil
     }
 
-    /// Satır sayısına göre konuşma yoğunluğu (senkron şeridi için).
+    /// Görüntü zamanı aralığındaki satırlar (ikili arama; senkron şeridi saniyede birkaç kez çağırır).
     func cues(in range: ClosedRange<Double>, timing: SubtitleTiming) -> [SubtitleCue] {
-        cues.filter {
-            let start = timing.displayTime(for: $0.start), end = timing.displayTime(for: $0.end)
-            return end >= range.lowerBound && start <= range.upperBound
+        let lower = timing.sourceTime(for: range.lowerBound), upper = timing.sourceTime(for: range.upperBound)
+        guard var index = firstIndex(endingAfter: min(lower, upper)) else { return [] }
+        var result: [SubtitleCue] = []
+        while index < cues.count, cues[index].start <= max(lower, upper) {
+            result.append(cues[index])
+            index += 1
         }
+        return result
     }
 }
 

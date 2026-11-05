@@ -27,6 +27,10 @@ struct KDPlayerApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 600, height: 720)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Ayarlar…") { app.openSettings?() }
+                    .keyboardShortcut(",")
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Dosya Aç…") { app.presentOpenPanel() }
                     .keyboardShortcut("o")
@@ -56,11 +60,13 @@ struct KDPlayerApp: App {
             }
         }
 
-        Settings {
+        // Hazır `Settings` sahnesi kendi başlık çubuğunu çizip trafik ışıklarını kesiyordu; başlıksız pencere.
+        Window("Ayarlar", id: "settings") {
             SettingsView()
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        .defaultPosition(.center)
     }
 }
 
@@ -69,6 +75,7 @@ struct RootView: View {
     let app: AppModel
     @Environment(\.modelContext) private var context
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -78,7 +85,7 @@ struct RootView: View {
                     .transition(.opacity)
             case .player:
                 PlayerView(session: app.session, onHome: app.goHome)
-                    .frame(minWidth: 640, minHeight: 400)
+                    .frame(minWidth: app.session.isMini ? 240 : 640, minHeight: app.session.isMini ? 135 : 400)
                     .transition(.opacity)
             }
         }
@@ -95,7 +102,10 @@ struct RootView: View {
         .background(WindowAccessor { window in
             if app.window !== window { app.window = window }
         })
-        .onAppear { app.session.modelContext = context }
+        .onAppear {
+            app.session.modelContext = context
+            app.openSettings = { openWindow(id: "settings") }
+        }
         .onOpenURL { app.handle(url: $0) }
     }
 }

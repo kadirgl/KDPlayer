@@ -8,18 +8,11 @@ struct ControlBar: View {
     private var player: PlayerController { session.player }
 
     var body: some View {
+        #if DEBUG
+        let _ = PerfCounters.controlBar += 1
+        #endif
         VStack(spacing: 12) {
-            HStack(spacing: 14) {
-                Text(Format.time(player.time))
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .frame(width: 58, alignment: .leading)
-                Scrubber(session: session)
-                Text(Format.remaining(player.remaining))
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(Overlay.secondary)
-                    .frame(width: 58, alignment: .trailing)
-            }
-            .monospacedDigit()
+            TimeRow(session: session)
 
             HStack(spacing: 0) {
                 HStack(spacing: 10) {
@@ -102,6 +95,26 @@ struct ControlBar: View {
         let audio = currentAudio?.languageName ?? "varsayılan"
         let subtitle = Language.name(for: subtitleCode) ?? "kapalı"
         return "\(audio) ses, \(subtitle) altyazı"
+    }
+}
+
+/// Zamana bağlı satır: saniyede birkaç kez yalnızca bu kısım yeniden çizilir, kontrol çubuğunun tamamı değil.
+private struct TimeRow: View {
+    let session: PlayerSession
+
+    var body: some View {
+        let player = session.player
+        HStack(spacing: 14) {
+            Text(Format.time(player.time))
+                .font(.system(size: 12.5, weight: .semibold))
+                .frame(width: 58, alignment: .leading)
+            Scrubber(session: session)
+            Text(Format.remaining(player.remaining))
+                .font(.system(size: 12.5))
+                .foregroundStyle(Overlay.secondary)
+                .frame(width: 58, alignment: .trailing)
+        }
+        .monospacedDigit()
     }
 }
 

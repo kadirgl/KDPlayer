@@ -5,6 +5,11 @@
 #   scripts/package-app.sh --debug     → debug derleme (hızlı, geliştirme için)
 #   scripts/package-app.sh --run       → paketleyip açar
 #   scripts/package-app.sh --install   → /Applications'a kopyalayıp açar
+#   scripts/package-app.sh --dmg       → ayrıca dist/KDPlayer-<sürüm>.dmg (Uygulamalar kısayollu)
+#   scripts/package-app.sh --profile   → optimize + test/ölçüm kancaları (performans ölçümü için)
+#
+# Release derlemesi evrenseldir (Apple Silicon + Intel); --debug yalnızca bu Mac'in mimarisi.
+# Sürüm: VERSION=0.2.0 scripts/package-app.sh --dmg
 #
 # VLCKit.framework Contents/Frameworks altına gömülür (LGPL: dinamik bağlama).
 # İmza yerel (ad-hoc). Dağıtım için Developer ID + notarization gerekir (spesifikasyon › Dağıtım).
@@ -19,9 +24,13 @@ BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 CONFIG="release"
 RUN=0
 INSTALL=0
+DMG=0
+PROFILE=0
 for arg in "$@"; do
     case "$arg" in
         --debug) CONFIG="debug" ;;
+        --dmg) DMG=1 ;;
+        --profile) CONFIG="release"; PROFILE=1 ;;
         --run) RUN=1 ;;
         --install) INSTALL=1 ;;
     esac
@@ -30,9 +39,16 @@ APP="dist/$EXECUTABLE.app"
 
 scripts/fetch-vlckit.sh
 
+ARCH_FLAGS=()
+# --profile: optimize edilmiş ama ölçüm/test kancaları açık (yalnızca bu Mac'in mimarisi, dağıtılmaz).
+if [[ $PROFILE -eq 1 ]]; then
+    ARCH_FLAGS=(-Xswiftc -DDEBUG)
+elif [[ "$CONFIG" == "release" ]]; then
+    ARCH_FLAGS=(--arch arm64 --arch x86_64)
+fi
 echo "→ $CONFIG derleniyor…"
-swift build -c "$CONFIG"
-BIN="$(swift build -c "$CONFIG" --show-bin-path)"
+swift build -c "$CONFIG" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+BIN="$(swift build -c "$CONFIG" ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 echo "→ $APP oluşturuluyor…"
 rm -rf "$APP"
@@ -149,7 +165,18 @@ echo "→ İmzalanıyor (ad-hoc)…"
 codesign --force --sign - "$APP/Contents/Frameworks/VLCKit.framework"
 codesign --force --sign - "$APP"
 
-echo "✓ $APP"
+echo "✓ $APP ($(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE"))"
+
+if [[ $DMG -eq 1 ]]; then
+    DMG_PATH="dist/$EXECUTABLE-$VERSION.dmg"
+    STAGE="$(mktemp -d)"
+    cp -R "$APP" "$STAGE/"
+    ln -s /Applications "$STAGE/Applications"
+    rm -f "$DMG_PATH"
+    hdiutil create -quiet -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG_PATH"
+    rm -rf "$STAGE"
+    echo "✓ $DMG_PATH ($(du -h "$DMG_PATH" | cut -f1))"
+fi
 if [[ $INSTALL -eq 1 ]]; then
     rm -rf "/Applications/$EXECUTABLE.app"
     cp -R "$APP" /Applications/

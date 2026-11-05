@@ -23,6 +23,11 @@ final class AppModel {
             guard window !== oldValue, let window else { return }
             configure(window)
             windowReady = true
+            // Pencere çizildikten sonra libVLC'yi ısıt.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [session] in session.player.warmUp() }
+            #if DEBUG
+            MainActor.assumeIsolated { UITestTour.runIfRequested(app: self) }
+            #endif
             if let pendingURL {
                 self.pendingURL = nil
                 open(pendingURL)
@@ -48,6 +53,9 @@ final class AppModel {
             return
         }
         let wasHome = route == .home
+        #if DEBUG
+        PerfTimeline.mark("app.open")
+        #endif
         route = .player
         session.open(url)
         if wasHome { resizeForPlayer() }
@@ -80,6 +88,9 @@ final class AppModel {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         open(url)
     }
+
+    /// Ayarlar penceresini açar (RootView `openWindow` ile doldurur).
+    @ObservationIgnored var openSettings: (() -> Void)?
 
     /// Davetle katılma ekranı açıkken oda kodu (ekran 12).
     var joinCode: String?
@@ -190,13 +201,14 @@ final class AppModel {
 
     private func resize(to size: CGSize) {
         guard let window, !window.styleMask.contains(.fullScreen) else { return }
-        let center = CGPoint(x: window.frame.midX, y: window.frame.midY)
+        let current = window.targetFrame
+        let center = CGPoint(x: current.midX, y: current.midY)
         let screen = window.screen?.visibleFrame ?? .zero
         var frame = NSRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width, height: size.height)
         if screen != .zero {
             frame.origin.x = frame.origin.x.clamped(to: screen.minX...max(screen.minX, screen.maxX - frame.width))
             frame.origin.y = frame.origin.y.clamped(to: screen.minY...max(screen.minY, screen.maxY - frame.height))
         }
-        window.setFrame(frame, display: true, animate: true)
+        window.animateFrame(to: frame)
     }
 }

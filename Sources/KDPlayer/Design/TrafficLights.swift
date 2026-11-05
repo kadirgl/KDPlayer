@@ -47,3 +47,26 @@ extension NSWindow {
         }
     }
 }
+
+extension NSWindow {
+    /// Pencere boyutunu ana iş parçacığını kilitlemeden canlandırır. `setFrame(_:display:animate: true)`
+    /// animasyon bitene kadar (≈0,35 sn) çalışma döngüsünü durduruyor, VLC olayları ve ilk kare gecikiyordu.
+    func animateFrame(to frame: NSRect, duration: TimeInterval = 0.25) {
+        let number = windowNumber
+        WindowFrameTargets.targets[number] = frame
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            animator().setFrame(frame, display: true)
+        } completionHandler: {
+            if WindowFrameTargets.targets[number] == frame { WindowFrameTargets.targets[number] = nil }
+        }
+    }
+
+    /// Süren animasyonun hedef boyutu (yoksa şimdiki boyut): ardışık boyutlandırmalar birbirini bozmasın.
+    var targetFrame: NSRect { WindowFrameTargets.targets[windowNumber] ?? frame }
+}
+
+private enum WindowFrameTargets {
+    nonisolated(unsafe) static var targets: [Int: NSRect] = [:]
+}

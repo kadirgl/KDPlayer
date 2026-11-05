@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 import SwiftData
 import Observation
 import MediaPlayer
@@ -78,12 +79,15 @@ final class PlayerSession {
     /// Return ile sohbet alanına odaklanma isteği.
     var chatFocusRequest = 0
     @ObservationIgnored var roomLoopTask: Task<Void, Never>?
+    @ObservationIgnored var resumeAfterRoomSetup = false
+    @ObservationIgnored private var openWatchdog: Task<Void, Never>?
 
     @ObservationIgnored weak var window: NSWindow?
     @ObservationIgnored var modelContext: ModelContext?
     @ObservationIgnored var onClose: (() -> Void)?
     @ObservationIgnored var onOpenFilePanel: (() -> Void)?
     @ObservationIgnored private var hideTask: Task<Void, Never>?
+    @ObservationIgnored private var lastActivity: CFTimeInterval = 0
     @ObservationIgnored var countdownTask: Task<Void, Never>?
     @ObservationIgnored private var pauseOnStart = false
     @ObservationIgnored private var lastSavedTime: Double = 0
@@ -101,7 +105,7 @@ final class PlayerSession {
             self?.toasts.show(Toast(kind: .success, title: "Dosyadaki \(track.languageName) altyazı açıldı", subtitle: "Gömülü altyazı her zaman birebir senkrondur"))
         }
         subtitles.onNeedsAttention = { [weak self] in
-            guard let self, self.panel == nil else { return }
+            guard let self, self.panel == nil, self.blockingError == nil, self.player.hasStarted, !self.inRoom else { return }
             withAnimation(Theme.spring) { self.panel = .find }
         }
         subtitles.onPersist = { [weak self] in self?.persistSubtitle() }
@@ -122,16 +126,27 @@ final class PlayerSession {
         nextEpisodeDismissed = false
         listeningForSpeech = false
         restoredTracks = false
+        pauseOnStart = false
+        player.silenced = false
         self.url = url
         parsed = ParsedFilename(filename: url.lastPathComponent)
         title = parsed.isEpisode ? "\(parsed.title) · \(parsed.episodeCode ?? "")" : parsed.title
 
+        #if DEBUG
+        PerfTimeline.mark("session.open")
+        #endif
         let hash = try? MovieHash.compute(for: url)
+        #if DEBUG
+        PerfTimeline.mark("hash")
+        #endif
         let record = hash.flatMap { fetchOrCreateRecord(hash: $0, url: url) }
         self.record = record
         record?.lastOpened = .now
         record?.path = url.path
 
+        #if DEBUG
+        PerfTimeline.mark("record")
+        #endif
         subtitles.reset(for: url, hash: hash)
 
         var start: Double?
@@ -143,6 +158,7 @@ final class PlayerSession {
             case .ask:
                 start = record.position
                 pauseOnStart = true
+                player.silenced = true
                 resumePrompt = ResumePrompt(position: record.position, duration: record.duration, lastOpened: record.lastOpened)
                 startResumeCountdown()
             case .never:
@@ -150,9 +166,16 @@ final class PlayerSession {
             }
         }
         player.open(url, startAt: start)
+        #if DEBUG
+        PerfTimeline.mark("player.open")
+        #endif
+        startOpenWatchdog()
         if let record { player.setAudioDelay(record.audioDelay) }
         subtitles.start(restoring: record)
         nextEpisode = findNextEpisode()
+        #if DEBUG
+        PerfTimeline.mark("session.open-end")
+        #endif
         controlsVisible = true
         scheduleHide()
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
@@ -165,6 +188,7 @@ final class PlayerSession {
         player.stop()
         countdownTask?.cancel()
         hideTask?.cancel()
+        hideTask = nil
         if isMini { toggleMini() }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         url = nil
@@ -189,14 +213,17 @@ final class PlayerSession {
     private func handleState(_ state: PlayerController.State) {
         switch state {
         case .playing:
-            if pauseOnStart {
-                pauseOnStart = false
-                player.pause()
-            }
             restoreTracksIfNeeded()
             updateDetail()
             scheduleHide()
         case .paused:
+            // VLC açamadığı dosyada oynat → duraklat'a düşüp öylece kalıyor.
+            if !player.hasStarted, !pauseOnStart, player.duration <= 0, url != nil, blockingError == nil {
+                openWatchdog?.cancel()
+                player.stop()
+                blockingError = makeError(message: "Dosya çözülemedi (süre ve görüntü okunamadı)")
+                return
+            }
             controlsVisible = true
             saveProgress(final: false)
         case .error(let message):
@@ -208,6 +235,12 @@ final class PlayerSession {
     }
 
     private func handleTime(_ time: Double) {
+        // Devam et kartı: ilk kare çözülünce duraklat (önceden duraklatınca kart siyah zeminde kalıyordu).
+        if pauseOnStart, player.hasVideoFrame || time > 0 {
+            pauseOnStart = false
+            player.pause()
+            player.silenced = false
+        }
         if abs(time - lastSavedTime) > 5 { saveProgress(final: false) }
         // Sonraki bölüm kartı: son 20 sn.
         if let nextEpisode, !nextEpisodeDismissed, nextEpisodeCountdown == nil, player.duration > 300,
@@ -217,7 +250,26 @@ final class PlayerSession {
         }
     }
 
+    /// VLC bozuk dosyada her zaman hata bildirmiyor: 8 sn içinde oynatma başlamazsa ya da hiç
+    /// başlamadan biterse engelleyen hata kartı.
+    private func startOpenWatchdog() {
+        openWatchdog?.cancel()
+        let opened = url
+        openWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, !Task.isCancelled, self.url == opened, !self.player.hasStarted,
+                  self.blockingError == nil, self.resumePrompt == nil, !self.player.state.isError else { return }
+            self.player.stop()
+            self.blockingError = self.makeError(message: "8 sn içinde oynatma başlamadı (\(self.player.duration > 0 ? "süre okundu" : "süre okunamadı"))")
+        }
+    }
+
     private func handleEnded() {
+        if !player.hasStarted {
+            openWatchdog?.cancel()
+            blockingError = makeError(message: "Dosya oynatılmadan bitti")
+            return
+        }
         record?.position = 0
         record?.finished = true
         if let nextEpisode, UserDefaults.standard.bool(forKey: SettingsKey.autoplayNextEpisode), !nextEpisodeDismissed {
@@ -309,23 +361,34 @@ final class PlayerSession {
     // MARK: Kontrol katmanı
 
     /// Fare 2,5 sn hareketsiz kalınca kontrol katmanı 300 ms'de gizlenir; panel açıkken gizlenmez.
+    /// Fare olayları saniyede onlarca kez gelir: her biri yalnızca zaman damgasını günceller,
+    /// gizleme tek bir bekleme görevinde yapılır (olay başına görev oluşturulmaz).
     func userActivity() {
+        lastActivity = CACurrentMediaTime()
         if !controlsVisible {
             withAnimation(.easeOut(duration: 0.2)) { controlsVisible = true }
         }
-        scheduleHide()
+        if hideTask == nil { scheduleHide() }
     }
 
     func scheduleHide() {
-        hideTask?.cancel()
+        lastActivity = CACurrentMediaTime()
+        guard hideTask == nil else { return }
         hideTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2.5))
-            guard let self, !Task.isCancelled else { return }
-            guard self.player.isPlaying, self.panel == nil, !self.tracksOpen, !self.hoveringControls,
-                  self.resumePrompt == nil, self.blockingError == nil, !self.showsRoomPanel,
-                  !self.roomSetupVisible, !self.readyCheckVisible else { return }
-            withAnimation(.easeInOut(duration: 0.3)) { self.controlsVisible = false }
-            NSCursor.setHiddenUntilMouseMoves(true)
+            while let self, !Task.isCancelled {
+                let remaining = self.lastActivity + 2.5 - CACurrentMediaTime()
+                if remaining > 0 {
+                    try? await Task.sleep(for: .seconds(remaining))
+                    continue
+                }
+                self.hideTask = nil
+                guard self.player.isPlaying, self.panel == nil, !self.tracksOpen, !self.hoveringControls,
+                      self.resumePrompt == nil, self.blockingError == nil, !self.showsRoomPanel,
+                      !self.roomSetupVisible, !self.readyCheckVisible else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { self.controlsVisible = false }
+                NSCursor.setHiddenUntilMouseMoves(true)
+                return
+            }
         }
     }
 
@@ -443,10 +506,19 @@ final class PlayerSession {
         }
     }
 
+    /// Odaya girerken devam kartını kapat: konumu oda belirler.
+    func dismissResumePrompt() {
+        countdownTask?.cancel()
+        resumePrompt = nil
+        pauseOnStart = false
+        player.silenced = false
+    }
+
     func resume(fromStart: Bool) {
         countdownTask?.cancel()
         withAnimation(.easeOut(duration: 0.2)) { resumePrompt = nil }
         pauseOnStart = false
+        player.silenced = false
         if fromStart { player.seek(to: 0) }
         player.play()
         scheduleHide()
@@ -541,17 +613,17 @@ final class PlayerSession {
         if isMini, let frame = miniRestoreFrame {
             window.level = .normal
             window.collectionBehavior.remove(.canJoinAllSpaces)
-            window.setFrame(frame, display: true, animate: true)
+            window.animateFrame(to: frame)
             isMini = false
         } else {
-            miniRestoreFrame = window.frame
+            miniRestoreFrame = window.targetFrame
             let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
             let aspect = player.videoSize.width > 0 ? player.videoSize.height / player.videoSize.width : 9 / 16
             let width: CGFloat = 480
             let frame = NSRect(x: screen.maxX - width - 20, y: screen.minY + 20, width: width, height: width * aspect)
             window.level = .floating
             window.collectionBehavior.insert(.canJoinAllSpaces)
-            window.setFrame(frame, display: true, animate: true)
+            window.animateFrame(to: frame)
             isMini = true
             panel = nil
             tracksOpen = false
@@ -586,7 +658,7 @@ final class PlayerSession {
             chatFocusRequest += 1
             return true
         case 53: // Esc
-            if roomSetupVisible { withAnimation(Theme.spring) { roomSetupVisible = false }; return true }
+            if roomSetupVisible { cancelRoomSetup(); return true }
             if tracksOpen { withAnimation(Theme.spring) { tracksOpen = false }; return true }
             if panel != nil { togglePanel(panel!); return true }
             if isMini { toggleMini(); return true }

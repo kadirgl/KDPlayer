@@ -107,7 +107,7 @@ struct ErrorCard: View {
                         DownloadManagerBridge.open()
                     }
                 }
-                ActionRow(icon: "play.circle", title: "Yine de oynat", subtitle: "Eksik kısma gelince durur", primary: !error.canCompleteDownload) {
+                ActionRow(icon: "play.circle", title: error.canCompleteDownload ? "Yine de oynat" : "Tekrar dene", subtitle: error.canCompleteDownload ? "Eksik kısma gelince durur" : "Dosyayı yeniden açar", primary: !error.canCompleteDownload) {
                     session.retry()
                 }
                 ActionRow(icon: "folder", title: "Başka dosya seç", subtitle: nil, primary: false) {
