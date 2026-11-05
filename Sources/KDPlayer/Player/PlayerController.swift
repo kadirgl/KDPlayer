@@ -80,9 +80,19 @@ final class PlayerController: NSObject {
         options.append("--freetype-color=\(SubtitleStyleStore.shared.style.color.rgb)")
         let player = VLCMediaPlayer(options: options)
         player.delegate = self
+        #if DEBUG
+        // Teşhis: KD_VLC_LOG=1 libVLC günlüğünü stderr'e yazar.
+        if ProcessInfo.processInfo.environment["KD_VLC_LOG"] != nil {
+            let logger = VLCConsoleLogger()
+            logger.level = .debug
+            player.libraryInstance.loggers = [logger]
+        }
+        #endif
         return player
     }()
     @ObservationIgnored var onEnded: (() -> Void)?
+    /// VLC'nin çözemediği ses parçası yerine başkası seçildi (istenen, seçilen).
+    @ObservationIgnored var onAudioFallback: ((MediaTrack, MediaTrack) -> Void)?
     @ObservationIgnored var onTimeChanged: ((Double) -> Void)?
     @ObservationIgnored var onStateChanged: ((State) -> Void)?
 
@@ -231,9 +241,25 @@ final class PlayerController: NSObject {
 
     // MARK: Parçalar
 
-    func selectAudio(_ id: Int32) {
-        mediaPlayer.currentAudioTrackIndex = id
-        currentAudioID = id
+    /// Çalınamayan parça (TrueHD) istenirse aynı dildeki en iyi çalınabilir parça seçilir; seçilenin kimliği döner.
+    @discardableResult
+    func selectAudio(_ id: Int32) -> Int32 {
+        var target = id
+        if let track = audioTracks.first(where: { $0.id == id }), track.isUnsupported,
+           let fallback = playableFallback(for: track) {
+            target = fallback.id
+            onAudioFallback?(track, fallback)
+        }
+        mediaPlayer.currentAudioTrackIndex = target
+        currentAudioID = target
+        return target
+    }
+
+    /// Aynı dilde (yorum olmayan) en çok kanallı çalınabilir parça; yoksa ilk çalınabilir parça.
+    func playableFallback(for track: MediaTrack) -> MediaTrack? {
+        let playable = audioTracks.filter { !$0.isUnsupported }
+        let sameLanguage = playable.filter { $0.languageCode == track.languageCode && !$0.isCommentary }
+        return sameLanguage.max { ($0.channels ?? 0) < ($1.channels ?? 0) } ?? playable.first
     }
 
     /// Gömülü altyazıyı VLC çizer; -1 kapatır (harici altyazıyı biz çizeriz).
@@ -315,6 +341,10 @@ final class PlayerController: NSObject {
         lastTrackCheck = now
         let audio = mediaPlayer.currentAudioTrackIndex
         if audio != currentAudioID { currentAudioID = audio }
+        // VLC "default" işaretli TrueHD parçasını kendiliğinden seçerse ses hiç gelmez.
+        if let track = audioTracks.first(where: { $0.id == audio }), track.isUnsupported {
+            selectAudio(audio)
+        }
         if mediaPlayer.currentVideoSubTitleIndex != currentEmbeddedSubtitleID {
             mediaPlayer.currentVideoSubTitleIndex = currentEmbeddedSubtitleID
         }
@@ -534,8 +564,9 @@ struct MediaTrack: Identifiable, Equatable {
         return ["PGS", "VobSub", "DVB"].contains(codec)
     }
 
-    /// Bu Mac'te çalınamayan ses codec'i (libVLC 3 TrueHD/MLP'yi her zaman çözemiyor).
-    var isUnsupported: Bool { false }
+    /// Bu sürümde çalınamayan ses codec'i: VLCKit 3.7.3'ün FFmpeg'inde TrueHD/MLP çözücüsü yok
+    /// (VLC günlüğü: "codec not found (TrueHD Audio)").
+    var isUnsupported: Bool { kind == .audio && codec == "TrueHD" }
 
     var channelLabel: String? {
         guard let channels, channels > 0 else { return nil }
@@ -553,6 +584,7 @@ struct MediaTrack: Identifiable, Equatable {
         switch kind {
         case .audio:
             var parts: [String] = []
+            if isUnsupported { parts.append("Bu sürümde çalınamıyor") }
             if let channelLabel { parts.append(channelLabel) }
             if let codec { parts.append(codec) }
             if let bitrate, bitrate > 0 { parts.append("\(bitrate * 8 / 1000) kbps") }

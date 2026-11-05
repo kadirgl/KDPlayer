@@ -100,6 +100,10 @@ final class PlayerSession {
         player.onStateChanged = { [weak self] state in self?.handleState(state) }
         player.onTimeChanged = { [weak self] time in self?.handleTime(time) }
         player.onEnded = { [weak self] in self?.handleEnded() }
+        player.onAudioFallback = { [weak self] requested, chosen in
+            self?.toasts.show(Toast(kind: .warning, title: "\(requested.codec ?? "Bu ses") çalınamıyor",
+                                    subtitle: "\(chosen.audioTitle) · \(chosen.meta) sesine geçildi"))
+        }
         subtitles.onAutoLoaded = { [weak self] candidate, loaded in self?.announceSubtitle(candidate: candidate, loaded: loaded) }
         subtitles.onEmbeddedSelected = { [weak self] track in
             self?.toasts.show(Toast(kind: .success, title: "Dosyadaki \(track.languageName) altyazı açıldı", subtitle: "Gömülü altyazı her zaman birebir senkrondur"))

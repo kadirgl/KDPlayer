@@ -70,6 +70,10 @@ final class AppModel {
                 session.player.seek(to: seek)
             }
         }
+        // Ses parçası denemesi: KD_DEBUG_AUDIO=1 (VLC parça kimliği)
+        if let id = ProcessInfo.processInfo.environment["KD_DEBUG_AUDIO"].flatMap(Int32.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [session] in session.player.selectAudio(id) }
+        }
         // Küçük pencere denemesi: KD_DEBUG_SIZE=640x400
         if let raw = ProcessInfo.processInfo.environment["KD_DEBUG_SIZE"] {
             let parts = raw.split(separator: "x").compactMap { Double($0) }
