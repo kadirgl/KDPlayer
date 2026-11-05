@@ -23,6 +23,7 @@ final class AppModel {
             guard window !== oldValue, let window else { return }
             configure(window)
             windowReady = true
+            MainActor.assumeIsolated { startUpdateChecks() }
             // Pencere çizildikten sonra libVLC'yi ısıt.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [session] in session.player.warmUp() }
             #if DEBUG
@@ -171,6 +172,34 @@ final class AppModel {
         }
     }
     #endif
+
+    // MARK: Güncelleme
+
+    @MainActor
+    private func startUpdateChecks() {
+        let updater = AppUpdater.shared
+        updater.onAvailable = { [weak self] release in
+            guard let self else { return }
+            let toast = Toast(kind: .info, title: "KD Player \(release.version) çıktı", subtitle: "Ayarlar › Genel'den kurabilirsin", actions: [
+                Toast.Action(title: "Göster", emphasized: true) { [weak self] in
+                    SettingsRouter.shared.tab = .general
+                    SettingsRouter.shared.focus = "updates"
+                    self?.openSettings?()
+                },
+            ], duration: 8)
+            (self.route == .player ? self.session.toasts : self.toasts).show(toast)
+        }
+        updater.startAutomaticChecks()
+        #if DEBUG
+        updater.runSelfTestIfRequested()
+        if ProcessInfo.processInfo.environment["KD_DEBUG_OPEN_SETTINGS"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                SettingsRouter.shared.focus = "updates"
+                self?.openSettings?()
+            }
+        }
+        #endif
+    }
 
     // MARK: Pencere
 

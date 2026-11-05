@@ -26,6 +26,11 @@ enum SettingsKey {
     static let roomDefaultControl = "roomDefaultControl"
     static let roomAutoAcceptSubtitle = "roomAutoAcceptSubtitle"
 
+    // Uygulama güncellemesi
+    static let appAutoUpdateCheck = "appAutoUpdateCheck"
+    static let appUpdateLastCheck = "appUpdateLastCheck"
+    static let appUpdateAnnounced = "appUpdateAnnounced"
+
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             volume: 80,
@@ -38,6 +43,7 @@ enum SettingsKey {
             subtitleLanguages: ["tr", "en"],
             rememberTrackLanguages: true,
             roomDefaultControl: "everyone",
+            appAutoUpdateCheck: true,
         ])
     }
 }

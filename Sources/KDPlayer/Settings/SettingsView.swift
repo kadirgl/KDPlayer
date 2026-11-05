@@ -19,6 +19,14 @@ struct SettingsView: View {
     @Bindable private var router = SettingsRouter.shared
     @State private var window: NSWindow?
 
+    private func scroll(_ proxy: ScrollViewProxy) {
+        guard let focus = router.focus else { return }
+        DispatchQueue.main.async {
+            withAnimation(Theme.spring) { proxy.scrollTo(focus, anchor: .top) }
+            router.focus = nil
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 14) {
@@ -30,18 +38,22 @@ struct SettingsView: View {
             }
             .frame(height: 28)
             KDSegmented(selection: $router.tab, options: Tab.allCases.map { ($0, $0.title) })
-            ScrollView {
-                Group {
-                    switch router.tab {
-                    case .general: GeneralSettings()
-                    case .subtitles: SubtitleSettings()
-                    case .room: RoomSettings()
-                    case .shortcuts: ShortcutSettings()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Group {
+                        switch router.tab {
+                        case .general: GeneralSettings()
+                        case .subtitles: SubtitleSettings()
+                        case .room: RoomSettings()
+                        case .shortcuts: ShortcutSettings()
+                        }
                     }
+                    .padding(.bottom, 6)
                 }
-                .padding(.bottom, 6)
+                .scrollIndicators(.never)
+                .onChange(of: router.focus) { scroll(proxy) }
+                .onAppear { scroll(proxy) }
             }
-            .scrollIndicators(.never)
         }
         .padding(20)
         .frame(width: 620, height: 640)
@@ -65,6 +77,8 @@ struct SettingsView: View {
 final class SettingsRouter {
     static let shared = SettingsRouter()
     var tab: SettingsView.Tab = .general
+    /// Açılınca kaydırılacak bölüm ("updates").
+    var focus: String?
 }
 
 // MARK: - Ortak
@@ -203,10 +217,13 @@ private struct GeneralSettings: View {
                 }
             }
 
+            UpdateSettingsSection()
+                .id("updates")
+
             SettingsSection(title: "Hakkında") {
                 SettingsCard {
                     HStack {
-                        TitleSubtitle(title: "KD Player \(AppInfo.version)", subtitle: "Oynatma motoru: VLCKit (libVLC 3), LGPL 2.1 lisansıyla dinamik bağlanır")
+                        TitleSubtitle(title: "Lisanslar", subtitle: "Oynatma motoru: VLCKit (libVLC 3), LGPL 2.1 lisansıyla dinamik bağlanır")
                         Spacer()
                         if let url = Bundle.main.url(forResource: "VLCKit-LICENSE", withExtension: "txt") {
                             Button("Lisans") { NSWorkspace.shared.open(url) }

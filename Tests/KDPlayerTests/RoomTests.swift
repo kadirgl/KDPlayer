@@ -45,3 +45,19 @@ struct RoomTests {
         #expect(!code.contains { "01OI".contains($0) })
     }
 }
+
+@Suite("Güncelleme")
+struct UpdateTests {
+    @Test func comparesVersions() {
+        #expect(AppUpdater.isNewer("0.1.10", than: "0.1.9"))
+        #expect(AppUpdater.isNewer("1.0", than: "0.9.9"))
+        #expect(!AppUpdater.isNewer("0.1.0", than: "0.1.0"))
+        #expect(!AppUpdater.isNewer("0.1", than: "0.1.0"))
+        #expect(!AppUpdater.isNewer("0.0.9", than: "0.1.0"))
+    }
+
+    @Test func notesSummaryDropsInstallSection() {
+        let notes = "## Değişiklikler\n\n- Hızlı açılış\n\n---\n**Kurulum:** …"
+        #expect(UpdateSettingsSection.summary(of: notes) == "- Hızlı açılış")
+    }
+}

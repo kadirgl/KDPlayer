@@ -55,6 +55,24 @@ yeniden bağlanma, sürüm uyuşmazlığı uyarısı, sohbet (zaman damgalı mes
 Sonraki adımlar: otomatik senkron (VAD + çapraz korelasyon), scrubber küçük resim önizlemesi, Subdl/Podnapisi
 kaynakları, Sparkle güncellemesi, Developer ID imzası + notarization, v2'de WebRTC data channel.
 
+## Güncellemeler ve sürüm yayımlama
+
+Kurulu uygulama günde bir kez GitHub Releases'teki son sürüme bakar; yeni sürüm varsa bildirim gösterir ve
+**Ayarlar › Genel › Uygulama güncellemesi › Güncelle ve yeniden başlat** ile kurulur. İndirilen paket kurulmadan
+önce Ed25519 imzası, paket kimliği, sürümü ve kod imzasıyla doğrulanır; imzası tutmayan paket kurulmaz.
+
+Bir kez: `scripts/update-key.sh` imza anahtarını oluşturur. Gizli anahtar yalnızca bu Mac'in Anahtar Zinciri'nde
+durur (`scripts/update-key.sh --export` ile yedekleyin; kaybolursa kullanıcılara uygulama içinden güncelleme
+gönderilemez), açık anahtar `scripts/update-public-key.txt`'te ve uygulamaya gömülür.
+
+```bash
+scripts/release.sh 0.2.0               # notlar son sürümden beri commit başlıklarından
+scripts/release.sh 0.2.0 notlar.md     # notlar dosyadan
+```
+
+Betik evrensel paketi, güncelleyici zip'ini ve DMG'yi üretir, zip'i imzalar, `v0.2.0` etiketini gönderir ve
+GitHub sürümünü oluşturur.
+
 ## Oda sunucusu
 
 Kullanıcı hiçbir şey ayarlamaz: sunucu adresi paketleme sırasında uygulamanın içine gömülür ve "Oda kur"

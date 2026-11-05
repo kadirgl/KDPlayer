@@ -72,6 +72,11 @@ else
     echo "⚠ Config/room-server.json yok: bu pakette birlikte izleme kapalı olur (scripts/setup-room-server.sh)"
 fi
 
+# Uygulama içi güncelleme (AppUpdater): GitHub deposu origin'den, imzayı doğrulayan açık anahtar scripts/update-public-key.txt'ten.
+UPDATE_REPOSITORY="${UPDATE_REPOSITORY:-$(git remote get-url origin 2>/dev/null | sed -nE 's#^(https://|git@)github\.com[:/]([^/]+/[^/.]+)(\.git)?$#\2#p' || true)}"
+UPDATE_PUBLIC_KEY="$(cat scripts/update-public-key.txt 2>/dev/null || true)"
+[[ -n "$UPDATE_REPOSITORY" && -n "$UPDATE_PUBLIC_KEY" ]] || echo "⚠ GitHub deposu ya da güncelleme anahtarı yok: bu paket kendini güncelleyemez"
+
 VIDEO_EXTS="mkv mp4 m4v mov avi wmv flv webm ts m2ts mts mpg mpeg vob ogv 3gp divx rmvb asf"
 EXT_XML=""
 for ext in $VIDEO_EXTS; do EXT_XML+="                <string>$ext</string>"$'\n'; done
@@ -107,6 +112,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <key>KDUpdateRepository</key>
+    <string>$UPDATE_REPOSITORY</string>
+    <key>KDUpdatePublicKey</key>
+    <string>$UPDATE_PUBLIC_KEY</string>
     <key>KDRoomDatabaseURL</key>
     <string>$ROOM_URL</string>
     <key>KDRoomAPIKey</key>
@@ -168,6 +177,11 @@ codesign --force --sign - "$APP"
 echo "✓ $APP ($(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE"))"
 
 if [[ $DMG -eq 1 ]]; then
+    # Güncelleyicinin indirdiği paket (imzası release.sh'de atılır).
+    ZIP_PATH="dist/$EXECUTABLE-$VERSION.zip"
+    rm -f "$ZIP_PATH"
+    ditto -c -k --keepParent "$APP" "$ZIP_PATH"
+    echo "✓ $ZIP_PATH ($(du -h "$ZIP_PATH" | cut -f1))"
     DMG_PATH="dist/$EXECUTABLE-$VERSION.dmg"
     STAGE="$(mktemp -d)"
     cp -R "$APP" "$STAGE/"
