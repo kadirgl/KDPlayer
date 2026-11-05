@@ -7,7 +7,8 @@ Tasarım: *KD Player – Liquid Glass* canvas'ı · Davranış: *KD Player – G
 ## Derleme
 
 ```bash
-scripts/fetch-vlckit.sh          # VLCKit 3.7.3'ü VideoLAN'dan Vendor/ altına indirir (bir kez, ~85 MB)
+scripts/build-vlckit.sh          # VLCKit 3.7.5'i TrueHD/MLP açık olarak kaynaktan derler (bir kez, ~20-30 dk, ~11 GB ara dosya)
+scripts/fetch-vlckit.sh          # ya da VideoLAN'ın hazır 3.7.3 paketini indirir (~85 MB; TrueHD yok)
 scripts/package-app.sh --debug --run   # dist/KDPlayer.app oluşturup açar
 scripts/package-app.sh           # release paketi (evrensel: Apple Silicon + Intel)
 VERSION=0.1.0 scripts/package-app.sh --dmg   # ayrıca dist/KDPlayer-0.1.0.dmg
@@ -22,6 +23,14 @@ scripts/test.sh                  # birim testleri
   kısayolları gerçek klavye olaylarıyla dener; günlüğe `STEP` (ekran görüntüsü anı) ve `CHECK ok/FAIL` yazar.
 - `KD_PERFTEST=<video>` — boşta / oynarken / panel açıkken CPU, bellek, saniyedeki yeniden çizim sayısı,
   açılış süresi ve aç-kapat döngüsünde bellek (`PERF` satırları).
+
+### VLCKit ve TrueHD
+
+VideoLAN'ın hazır VLCKit paketi, VLCKit'in kendi FFmpeg yaması (`libvlc/patches/0003-Enable-System-DL.patch`)
+yüzünden `--disable-decoder=mlp --disable-parser=mlp` ile derlenir; FFmpeg'in TrueHD çözücüsü mlp parser'ına bağlı
+olduğu için Blu-ray remux'lardaki TrueHD / Atmos parçaları sessiz kalır. `scripts/build-vlckit.sh` VLCKit 3.7.5'i (genel API 3.7.3 ile aynı) bu üç
+satır olmadan derler. Hangi paketin kurulu olduğu `Vendor/VLCKit.source`'ta yazar; uygulama da çalışırken
+`CodecSupport.trueHD` ile bakar ve çözücü yoksa TrueHD parçasını "çalınamıyor" diye işaretler.
 
 `swift build` tek başına da derler, ama VLCKit'in kurulum adı `@loader_path/../Frameworks` olduğu için
 uygulamayı paket (`dist/KDPlayer.app`) olarak çalıştırın.

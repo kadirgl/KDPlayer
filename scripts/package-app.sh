@@ -38,6 +38,10 @@ done
 APP="dist/$EXECUTABLE.app"
 
 scripts/fetch-vlckit.sh
+# Hazır VLCKit paketinde TrueHD/MLP çözücüsü yok (Blu-ray 7.1 / Atmos sesi çalınamaz).
+if ! grep -q truehd Vendor/VLCKit.source 2>/dev/null; then
+    echo "⚠ VLCKit TrueHD'siz (hazır paket): TrueHD parçaları çalınamaz. Kaynaktan derlemek için scripts/build-vlckit.sh"
+fi
 
 ARCH_FLAGS=()
 # --profile: optimize edilmiş ama ölçüm/test kancaları açık (yalnızca bu Mac'in mimarisi, dağıtılmaz).

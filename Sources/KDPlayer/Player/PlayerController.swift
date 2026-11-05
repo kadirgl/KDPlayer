@@ -564,9 +564,9 @@ struct MediaTrack: Identifiable, Equatable {
         return ["PGS", "VobSub", "DVB"].contains(codec)
     }
 
-    /// Bu sürümde çalınamayan ses codec'i: VLCKit 3.7.3'ün FFmpeg'inde TrueHD/MLP çözücüsü yok
-    /// (VLC günlüğü: "codec not found (TrueHD Audio)").
-    var isUnsupported: Bool { kind == .audio && codec == "TrueHD" }
+    /// Gömülü VLCKit'in çözemediği ses codec'i. VideoLAN'ın hazır VLCKit paketinde FFmpeg TrueHD/MLP'siz
+    /// derlenir ("codec not found (TrueHD Audio)"); `scripts/build-vlckit.sh` ile derlenen pakette çözücü vardır.
+    var isUnsupported: Bool { kind == .audio && codec == "TrueHD" && !CodecSupport.trueHD }
 
     var channelLabel: String? {
         guard let channels, channels > 0 else { return nil }
