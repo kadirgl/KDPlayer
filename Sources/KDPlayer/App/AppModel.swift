@@ -89,10 +89,10 @@ final class AppModel {
                 window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - parts[1], width: parts[0], height: parts[1]), display: true)
             }
         }
-        // Ekran görüntüsü için: KD_DEBUG_UI=find|sync|appearance|tracks
+        // Ekran görüntüsü için: KD_DEBUG_UI=find|sync|appearance|tracks|room
         if let ui = ProcessInfo.processInfo.environment["KD_DEBUG_UI"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [session] in
-                if ui == "tracks" { session.toggleTracks() } else if let tab = PlayerSession.PanelTab(rawValue: ui) { session.togglePanel(tab) }
+                if ui == "tracks" { session.toggleTracks() } else if ui == "room" { session.presentRoomSetup() } else if let tab = PlayerSession.PanelTab(rawValue: ui) { session.togglePanel(tab) }
             }
         }
         #endif

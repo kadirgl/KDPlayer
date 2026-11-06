@@ -17,6 +17,19 @@ enum Format {
         return formatter
     }()
 
+    private static let decimal3: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "tr_TR")
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 3
+        return formatter
+    }()
+
+    /// 23,976 fps · 25 fps · 29,97 fps (altyazı uyumu için kesir kaybolmamalı: 23,976 ≠ 24).
+    static func fps(_ fps: Double) -> String {
+        (decimal3.string(from: NSNumber(value: fps)) ?? "\(fps)") + " fps"
+    }
+
     /// 1:04:12 ya da 4:12.
     static func time(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }

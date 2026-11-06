@@ -229,6 +229,9 @@ struct PlayerView: View {
             if session.window?.styleMask.contains(.fullScreen) != true {
                 TrafficLights(window: session.window)
             }
+            // Başlangıç ekranı solda: sağ köşede kontrollere uzanırken yanlışlıkla tıklanıyordu.
+            KDIconButton(systemName: "house", label: "Başlangıç ekranı", action: onHome)
+                .help("Başlangıç ekranı (⇧⌘W)")
             if session.inRoom {
                 RoomHeader(session: session).layoutPriority(-1)
             } else {
@@ -260,8 +263,6 @@ struct PlayerView: View {
                 }
                 .help("Oda kur (⌘R)")
             }
-
-            KDIconButton(systemName: "house", label: "Başlangıç ekranı", action: onHome)
         }
         .foregroundStyle(Overlay.text)
         .onHover { session.hoveringControls = $0 }
@@ -336,7 +337,7 @@ struct PlayerView: View {
             return session.handleKey(event) ? nil : event
         }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            guard event.window === session.window, session.panel == nil, !session.tracksOpen,
+            guard event.window === session.window, volumeScrollAllowed,
                   event.hasPreciseScrollingDeltas, event.momentumPhase.isEmpty,
                   abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) else { return event }
             // İki parmak dikey kaydırma: ses.
@@ -347,6 +348,14 @@ struct PlayerView: View {
             }
             return nil
         }
+    }
+
+    /// Kaydırılabilir bir katman açıkken (panel, parça listesi, oda kur, sohbet, uyarı kartları)
+    /// iki parmak kaydırma o katmanındır; yoksa ses ayarına dönüşür ve formlar kaymaz.
+    private var volumeScrollAllowed: Bool {
+        session.panel == nil && !session.tracksOpen && !session.roomSetupVisible
+            && session.resumePrompt == nil && session.blockingError == nil
+            && !(session.inRoom && (session.showsRoomPanel || session.room.meta?.readyCheck == true))
     }
 
     /// İlk kare gelince pencereyi videonun en-boy oranına getirir (genişlik sabit, tam ekranda değil).

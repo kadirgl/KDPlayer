@@ -48,6 +48,7 @@ private struct FindTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             searchField
+            VideoInfoLine(player: session.player)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -291,7 +292,7 @@ private struct CandidateRow: View {
 
     private var meta: String {
         var parts = [candidate.source.title, Language.name(for: candidate.language) ?? candidate.language]
-        if let fps = candidate.fps { parts.append(String(format: "%.3g fps", fps)) }
+        if let fps = candidate.fps { parts.append(Format.fps(fps)) }
         if candidate.downloads > 0 { parts.append("\(Format.count(candidate.downloads)) indirme") }
         return parts.joined(separator: " · ")
     }
@@ -509,6 +510,27 @@ private struct EmbeddedFoundState: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 14).padding(.vertical, 12)
             .glass(radius: 18)
+        }
+    }
+}
+
+/// Oynatılan videonun kare hızı: altyazı seçerken sürümle (23,976 / 25 fps) karşılaştırmak için.
+private struct VideoInfoLine: View {
+    let player: PlayerController
+
+    var body: some View {
+        if let track = player.videoTrack, let fps = track.frameRate, fps > 0 {
+            HStack(spacing: 6) {
+                Image(systemName: "film").font(.system(size: 11))
+                Text("Video: ") + Text(Format.fps(fps)).foregroundColor(Overlay.text).fontWeight(.semibold)
+                    + Text(verbatim: track.resolutionLabel.map { " · \($0)" } ?? "")
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(Overlay.secondary)
+            .padding(.horizontal, 14)
+            .accessibilityElement(children: .combine)
+            .help("Altyazının kare hızı videonunkiyle aynı olmalı; farklıysa KD Player otomatik düzeltir")
         }
     }
 }

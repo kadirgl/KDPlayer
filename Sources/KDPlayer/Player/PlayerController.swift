@@ -603,10 +603,19 @@ struct MediaTrack: Identifiable, Equatable {
             return base
         case .video:
             var parts: [String] = []
-            if let height { parts.append("\(height)p") }
+            if let resolutionLabel { parts.append(resolutionLabel) }
             if let codec { parts.append(codec) }
             return parts.joined(separator: " ")
         }
+    }
+
+    /// Sürüm adlarındaki gibi "2160p" / "1080p": sinemaskop filmler (3840×1600, 1920×800) yüksekliğe göre
+    /// "1600p" / "800p" görünmesin diye genişlik de hesaba katılır.
+    var resolutionLabel: String? {
+        guard let height else { return nil }
+        let width = self.width ?? 0
+        let tier = [(3200, 2160), (2200, 1440), (1700, 1080), (1150, 720)].first { width >= $0.0 && height < $0.1 }?.1
+        return "\(max(height, tier ?? height))p"
     }
 
     /// Parçanın kendi başlığı ("SDH", "LA", "Atmos"): aynı dildeki parçaları ayırt etmek için.
