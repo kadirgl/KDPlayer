@@ -76,6 +76,15 @@ else
     echo "⚠ Config/room-server.json yok: bu pakette birlikte izleme kapalı olur (scripts/setup-room-server.sh)"
 fi
 
+# OpenSubtitles API anahtarı: Config/opensubtitles.key (depoya girmez) ya da OPENSUBTITLES_API_KEY.
+OPENSUBTITLES_KEY="${OPENSUBTITLES_API_KEY:-}"
+if [[ -z "$OPENSUBTITLES_KEY" && -f Config/opensubtitles.key ]]; then
+    OPENSUBTITLES_KEY="$(tr -d '[:space:]' < Config/opensubtitles.key)"
+fi
+if [[ -z "$OPENSUBTITLES_KEY" ]]; then
+    echo "⚠ OpenSubtitles anahtarı yok (Config/opensubtitles.key): internetten altyazı bulma kapalı paketlenir"
+fi
+
 # Uygulama içi güncelleme (AppUpdater): GitHub deposu origin'den, imzayı doğrulayan açık anahtar scripts/update-public-key.txt'ten.
 UPDATE_REPOSITORY="${UPDATE_REPOSITORY:-$(git remote get-url origin 2>/dev/null | sed -nE 's#^(https://|git@)github\.com[:/]([^/]+/[^/.]+)(\.git)?$#\2#p' || true)}"
 UPDATE_PUBLIC_KEY="$(cat scripts/update-public-key.txt 2>/dev/null || true)"
@@ -124,6 +133,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>$ROOM_URL</string>
     <key>KDRoomAPIKey</key>
     <string>$ROOM_KEY</string>
+    <key>OpenSubtitlesAPIKey</key>
+    <string>$OPENSUBTITLES_KEY</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

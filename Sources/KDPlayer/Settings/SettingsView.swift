@@ -365,10 +365,10 @@ private struct SubtitleSettings: View {
                     VStack(alignment: .leading, spacing: 10) {
                         TitleSubtitle(
                             title: "OpenSubtitles",
-                            subtitle: apiKey.isEmpty ? "İnternetten altyazı için API anahtarı gerekli · opensubtitles.com › API consumers" : "Anahtar kayıtlı · hesapsız günlük 5 indirme"
+                            subtitle: openSubtitlesStatus
                         )
                         HStack(spacing: 8) {
-                            SecureField("API anahtarı", text: $apiKey)
+                            SecureField(OpenSubtitlesClient.hasBundledKey ? "Kendi API anahtarın (isteğe bağlı)" : "API anahtarı", text: $apiKey)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 13))
                                 .foregroundStyle(Theme.textPrimary)
@@ -386,6 +386,12 @@ private struct SubtitleSettings: View {
                 }
             }
         }
+    }
+
+    private var openSubtitlesStatus: String {
+        if !apiKey.trimmingCharacters(in: .whitespaces).isEmpty { return "Kendi anahtarın kullanılıyor" }
+        if OpenSubtitlesClient.hasBundledKey { return "Hazır · KD Player'ın anahtarıyla otomatik arar, ayar gerekmez" }
+        return "İnternetten altyazı için API anahtarı gerekli · opensubtitles.com › API consumers"
     }
 
     private func move(_ index: Int, by offset: Int) {

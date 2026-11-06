@@ -33,7 +33,13 @@ struct OpenSubtitlesClient {
 
     static let base = URL(string: "https://api.opensubtitles.com/api/v1/")!
     let apiKey: String
-    var timeout: TimeInterval = 3
+    /// Arama çoğu zaman 1–2 sn sürer ama yoğun saatte 5 sn'yi bulabiliyor; 3 sn otomatik aramayı boşa düşürüyordu.
+    var timeout: TimeInterval = 10
+
+    /// Uygulamaya gömülü (paketlenirken Config/opensubtitles.key'den) anahtar var mı.
+    static var hasBundledKey: Bool {
+        (Bundle.main.object(forInfoDictionaryKey: "OpenSubtitlesAPIKey") as? String).map { !$0.isEmpty } ?? false
+    }
 
     static var configuredKey: String? {
         let stored = UserDefaults.standard.string(forKey: SettingsKey.openSubtitlesAPIKey)?.trimmingCharacters(in: .whitespaces)
@@ -65,6 +71,8 @@ struct OpenSubtitlesClient {
         if let episode { items.append(URLQueryItem(name: "episode_number", value: String(episode))) }
         // API, parametrelerin alfabetik sırada olmasını öneriyor (önbellek isabeti).
         components.queryItems = items.sorted { $0.name < $1.name }
+        // API boşluğu "+" olarak bekliyor; "%20" ile her arama önce 301 yönlendirmesi alıyor.
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "%20", with: "+")
 
         let (data, response) = try await URLSession.shared.data(for: request(components.url!))
         try check(response)
