@@ -8,13 +8,15 @@ final class SubtitleService {
     // MARK: Modeller
 
     enum Source: String, Codable {
-        case embedded, sidecar, openSubtitles, file, room
+        case embedded, sidecar, openSubtitles, subdl, turkcealtyazi, file, room
 
         var title: String {
             switch self {
             case .embedded: "Dosyanın içi"
             case .sidecar: "Yanındaki dosya"
             case .openSubtitles: "OpenSubtitles"
+            case .subdl: "Subdl"
+            case .turkcealtyazi: "turkcealtyazi.org"
             case .file: "Dosyadan"
             case .room: "Oda"
             }
@@ -48,6 +50,8 @@ final class SubtitleService {
         let downloads: Int
         let fileID: Int?
         let localURL: URL?
+        /// Subdl indirme yolu ("/subtitle/…zip").
+        var downloadPath: String? = nil
 
         static func == (lhs: Candidate, rhs: Candidate) -> Bool { lhs.id == rhs.id }
     }
@@ -198,6 +202,9 @@ final class SubtitleService {
             SourceStatus(id: Source.sidecar.title, status: .waiting),
             SourceStatus(id: Source.openSubtitles.title, status: hasKey ? .waiting : .skipped("anahtar yok")),
         ]
+        if SubdlClient.configuredKey != nil {
+            sources.append(SourceStatus(id: Source.subdl.title, status: .waiting))
+        }
         searchTask = Task { @MainActor [weak self] in
             await self?.runPipeline()
         }
@@ -245,32 +252,57 @@ final class SubtitleService {
         }
         if Task.isCancelled { return }
 
-        // 3–4. İnternet: hash, sonra ad
-        guard let key = OpenSubtitlesClient.configuredKey else {
-            finishSearch()
-            return
-        }
-        setStatus(Source.openSubtitles.title, .running)
-        let client = OpenSubtitlesClient(apiKey: key)
-        var results: [OpenSubtitlesClient.Result] = []
-        do {
-            if let hash = fileHash {
-                results = try await client.search(hash: hash, query: nil, season: parsedName.season, episode: parsedName.episode, languages: languages)
+        // 3–4. İnternet: OpenSubtitles (hash, sonra ad)
+        var online: [Candidate] = []
+        if let key = OpenSubtitlesClient.configuredKey {
+            setStatus(Source.openSubtitles.title, .running)
+            let client = OpenSubtitlesClient(apiKey: key)
+            var results: [OpenSubtitlesClient.Result] = []
+            do {
+                if let hash = fileHash {
+                    results = try await client.search(hash: hash, query: nil, season: parsedName.season, episode: parsedName.episode, languages: languages)
+                }
+                if !results.contains(where: \.hashMatch) {
+                    let byName = try await client.search(hash: nil, query: parsedName.title, season: parsedName.season, episode: parsedName.episode, languages: languages)
+                    let known = Set(results.map(\.fileID))
+                    results += byName.filter { !known.contains($0.fileID) }
+                }
+                setStatus(Source.openSubtitles.title, results.isEmpty ? .none : .found(results.count))
+            } catch {
+                lastError = error.localizedDescription
+                setStatus(Source.openSubtitles.title, .skipped(error is OpenSubtitlesClient.ClientError ? "sınır" : "bağlantı yok"))
             }
-            if !results.contains(where: \.hashMatch) {
-                let byName = try await client.search(hash: nil, query: parsedName.title, season: parsedName.season, episode: parsedName.episode, languages: languages)
-                let known = Set(results.map(\.fileID))
-                results += byName.filter { !known.contains($0.fileID) }
-            }
-            setStatus(Source.openSubtitles.title, results.isEmpty ? .none : .found(results.count))
-        } catch {
-            lastError = error.localizedDescription
-            setStatus(Source.openSubtitles.title, .skipped(error is OpenSubtitlesClient.ClientError ? "sınır" : "bağlantı yok"))
+            online = results.map(makeCandidate)
         }
         if Task.isCancelled { return }
 
-        candidates = (candidates + results.map(makeCandidate)).sorted(by: Self.ranking(languages: languages))
+        // 5. Subdl: OpenSubtitles birincil dilde bir şey bulamadıysa.
+        if !online.contains(where: { $0.language == languages.first }), SubdlClient.configuredKey != nil {
+            setStatus(Source.subdl.title, .running)
+            let found = await searchSubdl(title: parsedName.title, year: parsedName.year, season: parsedName.season,
+                                          episode: parsedName.episode, languages: languages)
+            setStatus(Source.subdl.title, found.map { $0.isEmpty ? .none : .found($0.count) } ?? .skipped("bağlantı yok"))
+            online += found ?? []
+        } else if SubdlClient.configuredKey != nil {
+            setStatus(Source.subdl.title, .skipped("gerek yok"))
+        }
+        if Task.isCancelled { return }
+
+        candidates = (candidates + online).sorted(by: Self.ranking(languages: languages))
         finishSearch()
+    }
+
+    /// Subdl araması; hata olursa nil (sessizce sonraki adıma geçilir).
+    @MainActor
+    private func searchSubdl(title: String, year: Int?, season: Int?, episode: Int?, languages: [String]) async -> [Candidate]? {
+        guard let key = SubdlClient.configuredKey else { return nil }
+        do {
+            let results = try await SubdlClient(apiKey: key).search(title: title, year: year, season: season, episode: episode, languages: languages)
+            return results.map(makeSubdlCandidate)
+        } catch {
+            if lastError == nil { lastError = error.localizedDescription }
+            return nil
+        }
     }
 
     @MainActor
@@ -292,36 +324,53 @@ final class SubtitleService {
         }
     }
 
-    /// Kullanıcının "Farklı adla ara" ya da dil değiştirmesiyle yeniden arama (yalnızca internet).
+    /// Kullanıcının "Farklı adla ara" ya da dil değiştirmesiyle yeniden arama (yalnızca internet:
+    /// OpenSubtitles ve Subdl birlikte).
     func searchOnline() {
         searchTask?.cancel()
-        guard let key = OpenSubtitlesClient.configuredKey else {
+        let openKey = OpenSubtitlesClient.configuredKey
+        let hasSubdl = SubdlClient.configuredKey != nil
+        guard openKey != nil || hasSubdl else {
             lastError = OpenSubtitlesClient.ClientError.missingKey.localizedDescription
             phase = .notFound
             return
         }
         phase = .searching
-        sources = [SourceStatus(id: Source.openSubtitles.title, status: .running)]
+        lastError = nil
+        sources = []
+        if openKey != nil { sources.append(SourceStatus(id: Source.openSubtitles.title, status: .running)) }
+        if hasSubdl { sources.append(SourceStatus(id: Source.subdl.title, status: .running)) }
         let query = self.query
         let languages = [language]
         searchTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            do {
-                let parsed = ParsedFilename(filename: query)
-                let results = try await OpenSubtitlesClient(apiKey: key).search(
-                    hash: self.fileHash, query: parsed.title, season: parsed.season ?? self.parsedName.season,
-                    episode: parsed.episode ?? self.parsedName.episode, languages: languages
-                )
-                if Task.isCancelled { return }
-                let local = self.findSidecars().filter { $0.language == self.language }
-                self.candidates = (local + results.map(self.makeCandidate)).sorted(by: Self.ranking(languages: languages))
-                self.setStatus(Source.openSubtitles.title, results.isEmpty ? .none : .found(results.count))
-                self.phase = self.candidates.isEmpty ? .notFound : .finished
-            } catch {
-                self.lastError = error.localizedDescription
-                self.setStatus(Source.openSubtitles.title, .skipped("hata"))
-                self.phase = self.candidates.isEmpty ? .notFound : .finished
+            let parsed = ParsedFilename(filename: query)
+            let season = parsed.season ?? self.parsedName.season
+            let episode = parsed.episode ?? self.parsedName.episode
+            async let subdl: [Candidate]? = hasSubdl
+                ? self.searchSubdl(title: parsed.title, year: parsed.year ?? self.parsedName.year, season: season, episode: episode, languages: languages)
+                : nil
+            var open: [Candidate] = []
+            if let openKey {
+                do {
+                    let results = try await OpenSubtitlesClient(apiKey: openKey).search(
+                        hash: self.fileHash, query: parsed.title, season: season, episode: episode, languages: languages
+                    )
+                    open = results.map(self.makeCandidate)
+                    self.setStatus(Source.openSubtitles.title, results.isEmpty ? .none : .found(results.count))
+                } catch {
+                    self.lastError = error.localizedDescription
+                    self.setStatus(Source.openSubtitles.title, .skipped("hata"))
+                }
             }
+            let fromSubdl = await subdl
+            if hasSubdl {
+                self.setStatus(Source.subdl.title, fromSubdl.map { $0.isEmpty ? .none : .found($0.count) } ?? .skipped("hata"))
+            }
+            if Task.isCancelled { return }
+            let local = self.findSidecars().filter { $0.language == self.language }
+            self.candidates = (local + open + (fromSubdl ?? [])).sorted(by: Self.ranking(languages: languages))
+            self.phase = self.candidates.isEmpty ? .notFound : .finished
         }
     }
 
@@ -342,11 +391,13 @@ final class SubtitleService {
                 let (data, remaining) = try await OpenSubtitlesClient(apiKey: key, timeout: 10).download(fileID: fileID)
                 remainingDownloads = remaining
                 (document, decoded) = try Self.parse(data)
-                // Yeniden açılışta internete gerek kalmasın: UTF-8 olarak sakla.
-                let name = "\(fileHash ?? UUID().uuidString).\(candidate.language).\(document.format.rawValue)"
-                let saved = AppInfo.subtitlesDirectory.appendingPathComponent(name)
-                try? decoded.text.write(to: saved, atomically: true, encoding: .utf8)
-                fileURL = saved
+                fileURL = store(decoded.text, language: candidate.language, format: document.format, nextToVideo: !auto || candidate.hashMatch)
+            } else if let path = candidate.downloadPath, let key = SubdlClient.configuredKey {
+                let result = SubdlClient.Result(path: path, releaseName: candidate.name, language: candidate.language,
+                                                hearingImpaired: false, fps: candidate.fps, season: nil, episode: nil, fullSeason: false)
+                let (data, _) = try await SubdlClient(apiKey: key).download(result, episodeCode: parsedName.episodeCode)
+                (document, decoded) = try Self.parse(data)
+                fileURL = store(decoded.text, language: candidate.language, format: document.format, nextToVideo: !auto || candidate.hashMatch)
             } else {
                 return false
             }
@@ -366,6 +417,36 @@ final class SubtitleService {
             lastError = (error as? LocalizedError)?.errorDescription ?? "Altyazı açılamadı"
             return false
         }
+    }
+
+    /// İnternetten inen altyazıyı UTF-8 olarak saklar: ayar açıksa videonun yanına (`film.tr.srt`; başka oynatıcılar
+    /// da görür, sonraki açılışta "yanındaki dosya" olur), yazılamazsa uygulamanın kendi klasörüne.
+    /// `nextToVideo`: yalnızca kullanıcının seçtiği ya da birebir (hash) eşleşen altyazı videonun yanına yazılır;
+    /// adı tutan ama yanlış olabilecek otomatik seçim kalıcı "yanındaki dosya"ya dönüşmesin.
+    private func store(_ text: String, language: String, format: SubtitleDocument.Format, nextToVideo: Bool = true) -> URL? {
+        if nextToVideo, UserDefaults.standard.bool(forKey: SettingsKey.subtitleSaveNextToVideo), let mediaURL,
+           let saved = SubtitleArchive.saveNextToVideo(text: text, video: mediaURL, language: language, format: format.rawValue) {
+            return saved
+        }
+        let name = "\(fileHash ?? UUID().uuidString).\(language).\(format.rawValue)"
+        let saved = AppInfo.subtitlesDirectory.appendingPathComponent(name)
+        return (try? text.write(to: saved, atomically: true, encoding: .utf8)) != nil ? saved : nil
+    }
+
+    /// turkcealtyazi.org'dan (tarayıcıda) indirilen zip/srt: altyazıyı çıkarır, videonun yanına kaydeder ve açar.
+    @discardableResult
+    func importDownloaded(_ url: URL) throws -> Loaded {
+        let raw = try Data(contentsOf: url)
+        let (data, innerName) = try SubtitleArchive.subtitleData(from: raw, episode: parsedName.episodeCode)
+        let (document, decoded) = try Self.parse(data)
+        let name = innerName ?? url.lastPathComponent
+        let detected = Language.guess(from: name) ?? "tr"
+        let fileURL = store(decoded.text, language: detected, format: document.format)
+        let loaded = Loaded(document: document, name: name, language: detected, source: .turkcealtyazi, fileURL: fileURL,
+                            encodingName: decoded.encodingName, repairNote: decoded.repairNote, score: nil, rawText: decoded.text)
+        apply(loaded, resetTiming: true)
+        phase = .finished
+        return loaded
     }
 
     /// Sürükle-bırak ya da "Dosyadan ekle".
@@ -636,6 +717,27 @@ final class SubtitleService {
             language: result.language, source: .openSubtitles, score: score, hashMatch: result.hashMatch,
             releaseMatch: releaseMatch, fpsMismatch: fpsMismatch, fps: result.fps, downloads: result.downloads,
             fileID: result.fileID, localURL: nil
+        )
+    }
+
+    private func makeSubdlCandidate(_ result: SubdlClient.Result) -> Candidate {
+        let release = ParsedFilename(filename: result.releaseName + ".x").release
+        let releaseMatch = release != nil && release == parsedName.release
+        let videoFPS = player?.videoTrack?.frameRate
+        let fpsMismatch = result.fps.flatMap { fps in videoFPS.map { abs($0 - fps) > 0.05 } } ?? false
+        // Dosya kimliğiyle eşleşme yok: en fazla %90 (OpenSubtitles hash eşleşmesinin altında kalır).
+        // Ad + yıl eşleşmesi tek başına otomatik açmaya yeter (≥ %60); sürüm uyumu öne çıkarır.
+        var score = 60
+        if releaseMatch { score += 25 }
+        if let fps = result.fps, let videoFPS, abs(fps - videoFPS) <= 0.05 { score += 10 }
+        if fpsMismatch { score -= 5 }
+        if result.hearingImpaired { score -= 3 }
+        if result.fullSeason { score -= 5 }
+        return Candidate(
+            id: "subdl-\(result.path)", name: result.releaseName.isEmpty ? result.path : result.releaseName,
+            language: result.language, source: .subdl, score: min(score, 90), hashMatch: false,
+            releaseMatch: releaseMatch, fpsMismatch: fpsMismatch, fps: result.fps, downloads: 0,
+            fileID: nil, localURL: nil, downloadPath: result.path
         )
     }
 

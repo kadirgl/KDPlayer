@@ -9,3 +9,6 @@ olduğu için **git'e girmez** (.gitignore); `scripts/package-app.sh` paketleme 
 (`OpenSubtitlesAPIKey`) gömer, `scripts/release.sh` dosya yoksa yayını durdurur. Yeni bir makinede tek satır olarak
 oluşturun ya da `OPENSUBTITLES_API_KEY` ortam değişkenini verin. Kullanıcı Ayarlar › Altyazı'dan kendi anahtarını
 girerse o önceliklidir.
+
+`subdl.key` Subdl API anahtarıdır (subdl.com › Hesap › API; ücretsiz, günde 2.000 arama). Aynı şekilde git'e girmez ve
+Info.plist'e (`SubdlAPIKey`) gömülür. İsteğe bağlıdır: yoksa Subdl yalnızca kullanıcı kendi anahtarını girerse çalışır.

@@ -304,6 +304,9 @@ private struct SubtitleSettings: View {
     @AppStorage(SettingsKey.subtitleAutoSync) private var autoSync = false
     @AppStorage(SettingsKey.subtitleEncoding) private var encoding = "auto"
     @AppStorage(SettingsKey.openSubtitlesAPIKey) private var apiKey = ""
+    @AppStorage(SettingsKey.subdlAPIKey) private var subdlKey = ""
+    @AppStorage(SettingsKey.subdlEnabled) private var subdlEnabled = true
+    @AppStorage(SettingsKey.subtitleSaveNextToVideo) private var saveNextToVideo = true
     @State private var languages: [String] = UserDefaults.standard.stringArray(forKey: SettingsKey.subtitleLanguages) ?? ["tr", "en"]
 
     private let allLanguages = ["tr", "en", "de", "fr", "es", "it", "ru", "ar", "ja", "ko", "pt", "nl"]
@@ -350,6 +353,7 @@ private struct SubtitleSettings: View {
                 SettingsCard {
                     KDSwitchRow(title: "Film açılınca altyazıyı bul ve yükle", subtitle: "Birebir eşleşme varsa sormadan açılır", isOn: $autoLoad)
                     KDSwitchRow(title: "Önce dosyanın içindekini kullan", subtitle: "Gömülü ya da yanındaki .srt varsa internete bakılmaz", isOn: $preferEmbedded)
+                    KDSwitchRow(title: "İndirilen altyazıyı videonun yanına kaydet", subtitle: "film.tr.srt olarak; başka oynatıcılar da görür, sonraki açılışta internete gerek kalmaz", isOn: $saveNextToVideo)
                     KDSwitchRow(title: "Her altyazıda otomatik senkron", subtitle: "Ses analiziyle hizalama sonraki sürümde geliyor", isOn: $autoSync)
                         .disabled(true)
                     HStack {
@@ -381,11 +385,41 @@ private struct SubtitleSettings: View {
                         }
                     }
                     .padding(.vertical, 8)
-                    KDSwitchRow(title: "Subdl", subtitle: "Kullanım şartları doğrulanınca açılacak", isOn: .constant(false)).disabled(true)
+                    VStack(alignment: .leading, spacing: 10) {
+                        KDSwitchRow(title: "Subdl", subtitle: subdlStatus, isOn: $subdlEnabled)
+                        if subdlEnabled {
+                            HStack(spacing: 8) {
+                                SecureField(SubdlClient.hasBundledKey ? "Kendi API anahtarın (isteğe bağlı)" : "Subdl API anahtarı", text: $subdlKey)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.textPrimary)
+                                    .padding(.horizontal, 14)
+                                    .frame(height: 36)
+                                    .glass(in: Capsule())
+                                Link("Anahtar al", destination: URL(string: "https://subdl.com/panel/api")!)
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(Theme.accentInk)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    HStack(spacing: 12) {
+                        TitleSubtitle(title: "turkcealtyazi.org", subtitle: "Otomatik erişime kapalı; Altyazı panelinden tarayıcıda açılır, indirdiğin zip/srt kendiliğinden eklenir")
+                        Spacer(minLength: 8)
+                        Image(systemName: "globe").foregroundStyle(Theme.textSecondary)
+                    }
+                    .padding(.vertical, 8)
                     KDSwitchRow(title: "Podnapisi", subtitle: "Kullanım şartları doğrulanınca açılacak", isOn: .constant(false)).disabled(true)
                 }
             }
         }
+    }
+
+    private var subdlStatus: String {
+        guard subdlEnabled else { return "Kapalı" }
+        if !subdlKey.trimmingCharacters(in: .whitespaces).isEmpty { return "Kendi anahtarın kullanılıyor · OpenSubtitles bulamazsa aranır" }
+        if SubdlClient.hasBundledKey { return "Hazır · OpenSubtitles bulamazsa aranır" }
+        return "Ücretsiz API anahtarı gerekli · subdl.com › Hesap › API"
     }
 
     private var openSubtitlesStatus: String {

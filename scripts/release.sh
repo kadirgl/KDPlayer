@@ -27,6 +27,7 @@ git remote get-url origin >/dev/null 2>&1 || fail "origin (GitHub deposu) yok"
 [[ -f scripts/update-public-key.txt ]] || fail "Açık anahtar yok (scripts/update-key.sh)"
 [[ -f Config/room-server.json ]] || fail "Config/room-server.json yok: birlikte izleme kapalı paketlenirdi"
 [[ -s Config/opensubtitles.key || -n "${OPENSUBTITLES_API_KEY:-}" ]] || fail "Config/opensubtitles.key yok: internetten altyazı bulma kapalı paketlenirdi"
+[[ -s Config/subdl.key || -n "${SUBDL_API_KEY:-}" ]] || fail "Config/subdl.key yok: Subdl kapalı paketlenirdi"
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && fail "$TAG etiketi zaten var"
 
 LATEST="$(gh release view --json tagName -q .tagName 2>/dev/null || true)"

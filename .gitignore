@@ -14,6 +14,7 @@ Vendor/VLCKit.source
 
 # OpenSubtitles API anahtarı: depo herkese açık, anahtar yalnızca paketlenen uygulamaya gömülür
 Config/opensubtitles.key
+Config/subdl.key
 
 # Paketleme çıktısı
 dist/

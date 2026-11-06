@@ -74,6 +74,13 @@ final class AppModel {
         if let id = ProcessInfo.processInfo.environment["KD_DEBUG_AUDIO"].flatMap(Int32.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [session] in session.player.selectAudio(id) }
         }
+        // İndirilenler izleme denemesi (tarayıcı açmadan): KD_DEBUG_WATCH=1
+        if ProcessInfo.processInfo.environment["KD_DEBUG_WATCH"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [session] in
+                session.watchingDownloads = true
+                session.downloadsWatcher.start(onFile: { session.handleDownloadedSubtitle($0) })
+            }
+        }
         // Küçük pencere denemesi: KD_DEBUG_SIZE=640x400
         if let raw = ProcessInfo.processInfo.environment["KD_DEBUG_SIZE"] {
             let parts = raw.split(separator: "x").compactMap { Double($0) }

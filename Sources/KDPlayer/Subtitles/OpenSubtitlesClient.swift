@@ -42,6 +42,10 @@ struct OpenSubtitlesClient {
     }
 
     static var configuredKey: String? {
+        #if DEBUG
+        // Subdl'i denemek için: KD_DISABLE_OPENSUBTITLES=1
+        if ProcessInfo.processInfo.environment["KD_DISABLE_OPENSUBTITLES"] != nil { return nil }
+        #endif
         let stored = UserDefaults.standard.string(forKey: SettingsKey.openSubtitlesAPIKey)?.trimmingCharacters(in: .whitespaces)
         if let stored, !stored.isEmpty { return stored }
         if let bundled = Bundle.main.object(forInfoDictionaryKey: "OpenSubtitlesAPIKey") as? String, !bundled.isEmpty { return bundled }

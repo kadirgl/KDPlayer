@@ -15,6 +15,9 @@ enum SettingsKey {
     static let subtitleEncoding = "subtitleEncoding"
     static let subtitleLanguages = "subtitleLanguages"
     static let openSubtitlesAPIKey = "openSubtitlesAPIKey"
+    static let subdlAPIKey = "subdlAPIKey"
+    static let subdlEnabled = "subdlEnabled"
+    static let subtitleSaveNextToVideo = "subtitleSaveNextToVideo"
     static let subtitleStyle = "subtitleStyle"
     static let rememberTrackLanguages = "rememberTrackLanguages"
     static let preferredAudioLanguage = "preferredAudioLanguage"
@@ -41,6 +44,8 @@ enum SettingsKey {
             subtitleAutoSync: false,
             subtitleEncoding: "auto",
             subtitleLanguages: ["tr", "en"],
+            subtitleSaveNextToVideo: true,
+            subdlEnabled: true,
             rememberTrackLanguages: true,
             roomDefaultControl: "everyone",
             appAutoUpdateCheck: true,

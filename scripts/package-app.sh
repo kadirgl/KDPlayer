@@ -85,6 +85,13 @@ if [[ -z "$OPENSUBTITLES_KEY" ]]; then
     echo "⚠ OpenSubtitles anahtarı yok (Config/opensubtitles.key): internetten altyazı bulma kapalı paketlenir"
 fi
 
+# Subdl API anahtarı (ikinci altyazı kaynağı): Config/subdl.key (depoya girmez) ya da SUBDL_API_KEY. İsteğe bağlı.
+SUBDL_KEY="${SUBDL_API_KEY:-}"
+if [[ -z "$SUBDL_KEY" && -f Config/subdl.key ]]; then
+    SUBDL_KEY="$(tr -d '[:space:]' < Config/subdl.key)"
+fi
+[[ -n "$SUBDL_KEY" ]] || echo "ℹ Subdl anahtarı yok (Config/subdl.key): Subdl yalnızca kullanıcı kendi anahtarını girerse çalışır"
+
 # Uygulama içi güncelleme (AppUpdater): GitHub deposu origin'den, imzayı doğrulayan açık anahtar scripts/update-public-key.txt'ten.
 UPDATE_REPOSITORY="${UPDATE_REPOSITORY:-$(git remote get-url origin 2>/dev/null | sed -nE 's#^(https://|git@)github\.com[:/]([^/]+/[^/.]+)(\.git)?$#\2#p' || true)}"
 UPDATE_PUBLIC_KEY="$(cat scripts/update-public-key.txt 2>/dev/null || true)"
@@ -135,6 +142,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>$ROOM_KEY</string>
     <key>OpenSubtitlesAPIKey</key>
     <string>$OPENSUBTITLES_KEY</string>
+    <key>SubdlAPIKey</key>
+    <string>$SUBDL_KEY</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

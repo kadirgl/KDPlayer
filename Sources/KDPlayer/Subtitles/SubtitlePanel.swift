@@ -135,6 +135,9 @@ private struct FindTab: View {
                     Task { await subtitles.preview(candidate) }
                 }
             }
+            if subtitles.phase != .searching, subtitles.phase != .idle || !subtitles.candidates.isEmpty {
+                TurkceAltyaziRow(session: session)
+            }
         }
     }
 
@@ -275,11 +278,11 @@ private struct CandidateRow: View {
     private var badgeItems: [KDBadge] {
         var items: [KDBadge] = []
         if candidate.hashMatch { items.append(KDBadge(text: "Birebir eşleşme", kind: .accent, systemImage: "checkmark")) }
-        if candidate.releaseMatch, let release = subtitles.parsedName.release, candidate.source == .openSubtitles {
+        if candidate.releaseMatch, let release = subtitles.parsedName.release, candidate.source == .openSubtitles || candidate.source == .subdl {
             items.append(KDBadge(text: "\(release) ile uyumlu"))
         }
         if candidate.fpsMismatch { items.append(KDBadge(text: "FPS farkı otomatik düzeltilir", kind: .info)) }
-        if candidate.score < 65, !candidate.hashMatch, candidate.source == .openSubtitles {
+        if candidate.score < 65, !candidate.hashMatch, candidate.source == .openSubtitles || candidate.source == .subdl {
             items.append(KDBadge(text: "Zaman kayması olabilir", kind: .warning))
         }
         if candidate.source == .sidecar { items.append(KDBadge(text: "Yanındaki dosya")) }
@@ -836,5 +839,39 @@ struct SyncStrip: View {
         .accessibilityAdjustableAction { direction in
             session.nudgeSubtitle(by: direction == .increment ? 100 : -100)
         }
+    }
+}
+
+/// turkcealtyazi.org: arama tarayıcıda açılır, indirilen zip/srt İndirilenler'den kendiliğinden eklenir.
+private struct TurkceAltyaziRow: View {
+    @Bindable var session: PlayerSession
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: session.watchingDownloads ? "arrow.down.circle" : "globe")
+                .font(.system(size: 16))
+                .frame(width: 24)
+                .symbolEffect(.pulse, isActive: session.watchingDownloads)
+            TitleSubtitle(
+                title: session.watchingDownloads ? "İndirmen bekleniyor…" : "turkcealtyazi.org'da ara",
+                subtitle: session.watchingDownloads
+                    ? "Tarayıcıda altyazıyı indir; zip ya da srt gelince otomatik eklenir"
+                    : "Tarayıcında açılır; indirdiğin altyazı kendiliğinden eklenir"
+            )
+            Spacer(minLength: 6)
+            if session.watchingDownloads {
+                Button("Vazgeç") { session.cancelDownloadsWatch() }
+                    .buttonStyle(.kd(.glass, height: 30, fontSize: 12))
+                    .fixedSize()
+            } else {
+                Text("Aç").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .glass(radius: 18)
+        .contentShape(Rectangle())
+        .onTapGesture { if !session.watchingDownloads { session.searchTurkceAltyazi() } }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 }

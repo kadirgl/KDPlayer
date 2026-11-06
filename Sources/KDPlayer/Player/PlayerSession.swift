@@ -44,6 +44,9 @@ final class PlayerSession {
     let toasts = ToastCenter()
     let hud = HUDCenter()
     let room = RoomService()
+    /// turkcealtyazi.org'dan tarayıcıda indirilecek altyazıyı bekleyen İndirilenler izleyicisi.
+    @ObservationIgnored @MainActor lazy var downloadsWatcher = DownloadsWatcher()
+    var watchingDownloads = false
 
     private(set) var url: URL?
     private(set) var title = ""
@@ -188,6 +191,7 @@ final class PlayerSession {
 
     func close() {
         if inRoom { leaveRoom() }
+        if watchingDownloads { MainActor.assumeIsolated { cancelDownloadsWatch() } }
         saveProgress(final: true)
         player.stop()
         countdownTask?.cancel()
