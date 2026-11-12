@@ -35,8 +35,10 @@ satır olmadan derler. Hangi paketin kurulu olduğu `Vendor/VLCKit.source`'ta ya
 `swift build` tek başına da derler, ama VLCKit'in kurulum adı `@loader_path/../Frameworks` olduğu için
 uygulamayı paket (`dist/KDPlayer.app`) olarak çalıştırın.
 
-Paket yerel (ad-hoc) imzalıdır; başka Mac'lerde ilk açılışta **Sistem Ayarları › Gizlilik ve Güvenlik › Yine de Aç**
-gerekir. Uyarısız dağıtım için Apple Developer ID imzası + notarization gerekir.
+Release paketi Anahtar Zinciri'ndeki "Developer ID Application" sertifikasıyla, hardened runtime ile imzalanır
+(sertifika yoksa ad-hoc; `--debug` her zaman ad-hoc). `scripts/release.sh` paketi Apple'a onaylatır (notarization)
+ve onayı uygulamaya ve dmg'ye zımbalar; böylece başka Mac'lerde ilk açılışta uyarı çıkmaz. Bunun için bir kez
+`scripts/notary-setup.sh` ile Apple ID ve uygulamaya özel parola Anahtar Zinciri'ne kaydedilir.
 
 ## Yapı
 
@@ -62,7 +64,7 @@ sapma düzeltme (< 150 ms dokunma, 150 ms – 2 sn hız ×0,97/×1,03, > 2 sn sa
 yeniden bağlanma, sürüm uyuşmazlığı uyarısı, sohbet (zaman damgalı mesajlar), tepkiler, paylaşılan altyazı kartı.
 
 Sonraki adımlar: otomatik senkron (VAD + çapraz korelasyon), scrubber küçük resim önizlemesi, Subdl/Podnapisi
-kaynakları, Sparkle güncellemesi, Developer ID imzası + notarization, v2'de WebRTC data channel.
+kaynakları, v2'de WebRTC data channel.
 
 ## Güncellemeler ve sürüm yayımlama
 

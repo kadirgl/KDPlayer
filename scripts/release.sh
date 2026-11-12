@@ -5,9 +5,11 @@
 #   scripts/release.sh 0.2.0               → notlar son sürümden beri commit başlıklarından
 #   scripts/release.sh 0.2.0 notlar.md     → notlar dosyadan
 #
-# Adımlar: paketler (evrensel .app + zip + dmg), zip'i Anahtar Zinciri'ndeki gizli anahtarla imzalar, imzayı
+# Adımlar: paketler (evrensel .app + zip + dmg, Developer ID ile imzalı ve Apple onaylı), zip'i Anahtar Zinciri'ndeki
+# gizli güncelleme anahtarıyla imzalar, imzayı
 # denetler, v0.2.0 etiketini ve main'i gönderir, zip + imza + dmg ile GitHub sürümünü oluşturur.
-# Gerekenler: gh (giriş yapılmış), temiz çalışma ağacı, scripts/update-key.sh ile oluşturulmuş anahtar.
+# Gerekenler: gh (giriş yapılmış), temiz çalışma ağacı, scripts/update-key.sh ile oluşturulmuş anahtar,
+# Developer ID Application sertifikası ve scripts/notary-setup.sh ile kaydedilmiş notarytool profili.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,6 +30,10 @@ git remote get-url origin >/dev/null 2>&1 || fail "origin (GitHub deposu) yok"
 [[ -f Config/room-server.json ]] || fail "Config/room-server.json yok: birlikte izleme kapalı paketlenirdi"
 [[ -s Config/opensubtitles.key || -n "${OPENSUBTITLES_API_KEY:-}" ]] || fail "Config/opensubtitles.key yok: internetten altyazı bulma kapalı paketlenirdi"
 [[ -s Config/subdl.key || -n "${SUBDL_API_KEY:-}" ]] || fail "Config/subdl.key yok: Subdl kapalı paketlenirdi"
+security find-identity -v -p codesigning | grep -q '"Developer ID Application:' \
+    || fail "Developer ID Application sertifikası yok: paket Apple onaysız kalırdı"
+xcrun notarytool history --keychain-profile "${NOTARY_PROFILE:-KDPlayer}" >/dev/null 2>&1 \
+    || fail "notarytool profili yok: scripts/notary-setup.sh"
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && fail "$TAG etiketi zaten var"
 
 LATEST="$(gh release view --json tagName -q .tagName 2>/dev/null || true)"
@@ -42,7 +48,7 @@ PUBLIC_KEY="$(cat scripts/update-public-key.txt)"
 [[ "$(printf '%s' "$PRIVATE_KEY" | swift scripts/update-signing.swift public)" == "$PUBLIC_KEY" ]] \
     || fail "Anahtar Zinciri'ndeki gizli anahtar scripts/update-public-key.txt ile eşleşmiyor"
 
-VERSION="$VERSION" scripts/package-app.sh --dmg
+VERSION="$VERSION" scripts/package-app.sh --dmg --notarize
 ASSET="dist/KDPlayer-$VERSION.zip"
 DMG="dist/KDPlayer-$VERSION.dmg"
 [[ -f "$ASSET" && -f "$DMG" ]] || fail "Paket oluşmadı"
@@ -64,7 +70,7 @@ cat >> "$NOTES" <<NOTES
 
 ---
 **Kurulum:** \`KDPlayer-$VERSION.dmg\` dosyasını açıp **KD Player**'ı **Uygulamalar** klasörüne sürükleyin.
-İlk açılışta macOS "geliştirici doğrulanamadı" derse: Sistem Ayarları › Gizlilik ve Güvenlik › **Yine de Aç**.
+Uygulama Developer ID ile imzalı ve Apple tarafından onaylıdır (notarized); ilk açılışta uyarı çıkmaz.
 Kurulu uygulama yeni sürümleri kendisi bulur (Ayarlar › Genel › Uygulama güncellemesi).
 Apple Silicon ve Intel, macOS 14 Sonoma ve sonrası.
 NOTES

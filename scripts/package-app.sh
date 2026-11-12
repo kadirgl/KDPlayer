@@ -7,12 +7,16 @@
 #   scripts/package-app.sh --install   → /Applications'a kopyalayıp açar
 #   scripts/package-app.sh --dmg       → ayrıca dist/KDPlayer-<sürüm>.dmg (Uygulamalar kısayollu)
 #   scripts/package-app.sh --profile   → optimize + test/ölçüm kancaları (performans ölçümü için)
+#   scripts/package-app.sh --dmg --notarize → Apple'a onaylatır (notarization) ve onayı pakete zımbalar
 #
 # Release derlemesi evrenseldir (Apple Silicon + Intel); --debug yalnızca bu Mac'in mimarisi.
 # Sürüm: VERSION=0.2.0 scripts/package-app.sh --dmg
 #
 # VLCKit.framework Contents/Frameworks altına gömülür (LGPL: dinamik bağlama).
-# İmza yerel (ad-hoc). Dağıtım için Developer ID + notarization gerekir (spesifikasyon › Dağıtım).
+# İmza: release derlemesi Anahtar Zinciri'ndeki "Developer ID Application" sertifikasıyla, hardened runtime ve
+# zaman damgasıyla imzalanır (SIGN_IDENTITY ile seçilebilir; sertifika yoksa ad-hoc). --debug/--profile ad-hoc.
+# Onay (--notarize): notarytool'un Anahtar Zinciri profili gerekir (NOTARY_PROFILE, varsayılan "KDPlayer"),
+# bir kez scripts/notary-setup.sh ile kaydedilir.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,16 +30,29 @@ RUN=0
 INSTALL=0
 DMG=0
 PROFILE=0
+NOTARIZE=0
+NOTARY_PROFILE="${NOTARY_PROFILE:-KDPlayer}"
 for arg in "$@"; do
     case "$arg" in
         --debug) CONFIG="debug" ;;
         --dmg) DMG=1 ;;
         --profile) CONFIG="release"; PROFILE=1 ;;
+        --notarize) NOTARIZE=1 ;;
         --run) RUN=1 ;;
         --install) INSTALL=1 ;;
     esac
 done
 APP="dist/$EXECUTABLE.app"
+
+SIGN_IDENTITY="${SIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" && "$CONFIG" == "release" && $PROFILE -eq 0 ]]; then
+    SIGN_IDENTITY="$(security find-identity -v -p codesigning | sed -nE 's/.*"(Developer ID Application: [^"]+)".*/\1/p' | head -1)"
+fi
+if [[ $NOTARIZE -eq 1 ]]; then
+    [[ $DMG -eq 1 && -n "$SIGN_IDENTITY" ]] || { echo "✗ --notarize, --dmg ve Developer ID sertifikası ister" >&2; exit 1; }
+    xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
+        || { echo "✗ notarytool profili \"$NOTARY_PROFILE\" yok ya da geçersiz: scripts/notary-setup.sh" >&2; exit 1; }
+fi
 
 scripts/fetch-vlckit.sh
 # Hazır VLCKit paketinde TrueHD/MLP çözücüsü yok (Blu-ray 7.1 / Atmos sesi çalınamaz).
@@ -194,9 +211,42 @@ $EXT_XML            </array>
 </plist>
 PLIST
 
-echo "→ İmzalanıyor (ad-hoc)…"
-codesign --force --sign - "$APP/Contents/Frameworks/VLCKit.framework"
-codesign --force --sign - "$APP"
+if [[ -n "$SIGN_IDENTITY" ]]; then
+    echo "→ İmzalanıyor ($SIGN_IDENTITY, hardened runtime)…"
+    # İçten dışa: önce gömülü çerçeve, sonra uygulama (--deep kullanılmaz).
+    codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/VLCKit.framework"
+    codesign --force --timestamp --options runtime --entitlements Config/KDPlayer.entitlements --sign "$SIGN_IDENTITY" "$APP"
+    codesign --verify --deep --strict "$APP"
+else
+    echo "→ İmzalanıyor (ad-hoc)…"
+    codesign --force --sign - "$APP/Contents/Frameworks/VLCKit.framework"
+    codesign --force --sign - "$APP"
+fi
+
+# Apple'a gönderir, onayı bekler; reddedilirse günlüğü gösterip durur.
+notarize() {
+    local file="$1" out id status
+    echo "→ Apple onayı bekleniyor: $(basename "$file") (birkaç dakika sürebilir)…"
+    out="$(xcrun notarytool submit "$file" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json)" || true
+    id="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1]).get("id",""))' "$out" 2>/dev/null || true)"
+    status="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1]).get("status",""))' "$out" 2>/dev/null || true)"
+    if [[ "$status" != "Accepted" ]]; then
+        echo "✗ Onay alınamadı (${status:-hata}): $out" >&2
+        [[ -n "$id" ]] && xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+        exit 1
+    fi
+    echo "✓ Onaylandı ($id)"
+}
+
+if [[ $NOTARIZE -eq 1 ]]; then
+    # Uygulama ayrıca onaylanıp zımbalanır: güncelleyicinin indirdiği zip'teki kopya da internetsiz açılır.
+    SUBMIT_ZIP="$(mktemp -d)/$EXECUTABLE.zip"
+    ditto -c -k --keepParent "$APP" "$SUBMIT_ZIP"
+    notarize "$SUBMIT_ZIP"
+    rm -rf "$(dirname "$SUBMIT_ZIP")"
+    xcrun stapler staple -q "$APP"
+    xcrun stapler validate -q "$APP"
+fi
 
 echo "✓ $APP ($(lipo -archs "$APP/Contents/MacOS/$EXECUTABLE"))"
 
@@ -213,6 +263,15 @@ if [[ $DMG -eq 1 ]]; then
     rm -f "$DMG_PATH"
     hdiutil create -quiet -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG_PATH"
     rm -rf "$STAGE"
+    if [[ -n "$SIGN_IDENTITY" ]]; then
+        codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+    fi
+    if [[ $NOTARIZE -eq 1 ]]; then
+        notarize "$DMG_PATH"
+        xcrun stapler staple -q "$DMG_PATH"
+        spctl --assess --type open --context context:primary-signature "$DMG_PATH" && echo "✓ Gatekeeper dmg'yi kabul ediyor"
+        spctl --assess --type execute "$APP" && echo "✓ Gatekeeper uygulamayı kabul ediyor"
+    fi
     echo "✓ $DMG_PATH ($(du -h "$DMG_PATH" | cut -f1))"
 fi
 if [[ $INSTALL -eq 1 ]]; then
