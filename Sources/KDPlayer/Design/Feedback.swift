@@ -234,3 +234,40 @@ struct HUDView: View {
         }
     }
 }
+
+/// Oynat/duraklat geri bildirimi: ortada koyu daire içinde simge belirir, büyüyerek kaybolur (≈ 0,6 sn).
+/// Video sitelerindeki alışılmış davranış; tıklamayı engellemez.
+struct PlayPauseFlashView: View {
+    let flash: PlayerSession.PlayPauseFlash?
+
+    private struct Frame {
+        var scale: CGFloat = 1
+        var opacity: Double = 0
+    }
+
+    var body: some View {
+        Image(systemName: flash?.playing == true ? "play.fill" : "pause.fill")
+            .font(.system(size: 30, weight: .bold))
+            .offset(x: flash?.playing == true ? 2 : 0)
+            .foregroundStyle(.white)
+            .frame(width: 78, height: 78)
+            .background(Circle().fill(.black.opacity(0.5)))
+            .keyframeAnimator(initialValue: Frame(), trigger: flash?.id) { content, frame in
+                content.scaleEffect(frame.scale).opacity(frame.opacity)
+            } keyframes: { _ in
+                // Yalnızca doğrusal kareler: süresi çok kısa kareyle yan yana CubicKeyframe NaN üretip
+                // AppKit'i çökertiyor (setFrameTransform: isfinite).
+                KeyframeTrack(\.scale) {
+                    LinearKeyframe(0.9, duration: 0.01)
+                    LinearKeyframe(1.45, duration: 0.6, timingCurve: .easeOut)
+                }
+                KeyframeTrack(\.opacity) {
+                    LinearKeyframe(1, duration: 0.01)
+                    LinearKeyframe(1, duration: 0.15)
+                    LinearKeyframe(0, duration: 0.45, timingCurve: .easeIn)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}

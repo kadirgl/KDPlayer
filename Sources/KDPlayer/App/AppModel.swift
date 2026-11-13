@@ -89,10 +89,17 @@ final class AppModel {
                 window.setFrame(NSRect(x: window.frame.minX, y: window.frame.maxY - parts[1], width: parts[0], height: parts[1]), display: true)
             }
         }
-        // Ekran görüntüsü için: KD_DEBUG_UI=find|sync|appearance|tracks|room
+        // Ekran görüntüsü için: KD_DEBUG_UI=find|sync|appearance|tracks|room|paused
         if let ui = ProcessInfo.processInfo.environment["KD_DEBUG_UI"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [session] in
-                if ui == "tracks" { session.toggleTracks() } else if ui == "room" { session.presentRoomSetup() } else if let tab = PlayerSession.PanelTab(rawValue: ui) { session.togglePanel(tab) }
+                if ui == "tracks" { session.toggleTracks() } else if ui == "room" { session.presentRoomSetup() } else if ui == "paused" {
+                    // Video oynamaya başlayınca duraklat (oynat/duraklat bildirimi de görünür).
+                    Task { @MainActor in
+                        for _ in 0..<50 where !session.player.isPlaying { try? await Task.sleep(for: .milliseconds(100)) }
+                        try? await Task.sleep(for: .seconds(1))
+                        session.togglePlayPause()
+                    }
+                } else if let tab = PlayerSession.PanelTab(rawValue: ui) { session.togglePanel(tab) }
             }
         }
         #endif

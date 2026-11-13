@@ -34,8 +34,8 @@ extension View {
     }
 
     /// Ana pencere camı (Başlangıç, Ayarlar): masaüstünü bulanıklaştırır.
-    func windowGlass(radius: CGFloat = Theme.windowRadius) -> some View {
-        background(WindowGlassBackground(radius: radius))
+    func windowGlass(radius: CGFloat? = nil) -> some View {
+        background(WindowGlassBackground(radius: radius ?? Theme.windowRadius))
     }
 
     /// Cam kenarı: üstte iç parlama + ince iç çerçeve.

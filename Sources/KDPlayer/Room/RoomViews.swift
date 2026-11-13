@@ -348,16 +348,25 @@ struct RoomHeader: View {
 /// "Herkes senkron · 38 ms" / "Mert bekleniyor…"
 struct RoomSyncStatus: View {
     let room: RoomService
+    /// Dar kontrol çubuğunda yalnızca renkli nokta; yazı ipucunda (kesik "Herkes s…" görünmesin).
+    var dotOnly = false
 
     var body: some View {
         let waiting = room.bufferingMembers
         let reconnecting = room.reconnectingMembers
+        let label = text(waiting: waiting, reconnecting: reconnecting)
         HStack(spacing: 6) {
             Circle().fill(color(waiting: waiting, reconnecting: reconnecting)).frame(width: 8, height: 8)
-            Text(text(waiting: waiting, reconnecting: reconnecting))
-                .font(.system(size: 12)).foregroundStyle(Overlay.text.opacity(0.8)).monospacedDigit().lineLimit(1)
+            if !dotOnly {
+                Text(label)
+                    .font(.system(size: 12)).foregroundStyle(Overlay.text.opacity(0.8)).monospacedDigit().lineLimit(1)
+            }
         }
+        .frame(minWidth: dotOnly ? 20 : nil, minHeight: dotOnly ? 20 : nil)
+        .contentShape(Rectangle())
+        .help(label)
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
     }
 
     private func text(waiting: [RoomMember], reconnecting: [RoomMember]) -> String {

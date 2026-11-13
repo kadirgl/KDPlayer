@@ -57,6 +57,12 @@ final class PlayerSession {
     var controlsVisible = true
     var panel: PanelTab?
     var tracksOpen = false
+    /// Oynat/duraklat anında ekranın ortasında beliren simge (her basışta yeni kimlik: animasyon yeniden oynar).
+    struct PlayPauseFlash: Equatable {
+        let id = UUID()
+        let playing: Bool
+    }
+    var playPauseFlash: PlayPauseFlash?
     var resumePrompt: ResumePrompt?
     var blockingError: BlockingError?
     var nextEpisode: NextEpisode?
@@ -179,7 +185,13 @@ final class PlayerSession {
         startOpenWatchdog()
         if let record { player.setAudioDelay(record.audioDelay) }
         subtitles.start(restoring: record)
-        nextEpisode = findNextEpisode()
+        // Klasör taraması ana iş parçacığında yapılmaz: İndirilenler gibi korumalı klasörde macOS izin sorarken
+        // oynatıcı donmasın.
+        nextEpisode = nil
+        Task { [weak self] in
+            guard let self, let found = await self.findNextEpisode(), self.url == url else { return }
+            self.nextEpisode = found
+        }
         #if DEBUG
         PerfTimeline.mark("session.open-end")
         #endif
@@ -427,6 +439,7 @@ final class PlayerSession {
         let willPlay = !player.isPlaying
         pausedForBuffering = false
         player.togglePlayPause()
+        playPauseFlash = PlayPauseFlash(playing: willPlay)
         broadcastPlayback(willPlay ? "play" : "pause", playing: willPlay)
         userActivity()
     }
@@ -590,10 +603,12 @@ final class PlayerSession {
     }
 
     /// Klasördeki SxxEyy sırasından bir sonraki bölümü bulur.
-    private func findNextEpisode() -> NextEpisode? {
+    private func findNextEpisode() async -> NextEpisode? {
         guard let url, let season = parsed.season, let episode = parsed.episode else { return nil }
         let folder = url.deletingLastPathComponent()
-        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        let files = await Task.detached(priority: .utility) {
+            (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        }.value
         let videos = files.filter { AppInfo.videoExtensions.contains($0.pathExtension.lowercased()) }
         let parsedFiles = videos.map { ($0, ParsedFilename(filename: $0.lastPathComponent)) }
         let sameShow = parsedFiles.filter { $0.1.title.lowercased() == parsed.title.lowercased() }
@@ -606,6 +621,7 @@ final class PlayerSession {
     // MARK: Hatalar
 
     private func makeError(message: String) -> BlockingError {
+        if !player.hasStarted { subtitles.abandon() }
         let name = url?.lastPathComponent ?? "Dosya"
         let size = (try? url?.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 }
         let partial = url.map { FileManager.default.fileExists(atPath: $0.path + ".aria2") || FileManager.default.fileExists(atPath: $0.path + ".part") } ?? false

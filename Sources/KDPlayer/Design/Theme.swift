@@ -80,8 +80,21 @@ enum Theme {
 
     // MARK: Köşe, boyut
 
-    static let windowRadius: CGFloat = 30
-    static let videoWindowRadius: CGFloat = 28
+    /// Pencere kenarı macOS'un kendi köşe yarıçapıyla aynı olmalı (macOS 26+: 16 pt): içerik daha büyük
+    /// yarıçapla kırpılırsa köşede pencerenin koyu zemini görünür.
+    @MainActor static var windowRadius: CGFloat { systemWindowRadius }
+    @MainActor static var videoWindowRadius: CGFloat { systemWindowRadius }
+
+    /// Bizim pencerelerle aynı biçimdeki bir pencereden okunur; okunamazsa macOS 14/15'in değeri.
+    @MainActor static let systemWindowRadius: CGFloat = {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: true)
+        let key = "_cornerRadius"
+        guard window.responds(to: NSSelectorFromString(key)), let value = window.value(forKey: key) as? NSNumber,
+              value.doubleValue > 0, value.doubleValue < 40 else { return 10 }
+        return CGFloat(value.doubleValue)
+    }()
     static let panelRadius: CGFloat = 26
     static let cardRadius: CGFloat = 22
     static let rowRadius: CGFloat = 16

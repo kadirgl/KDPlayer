@@ -163,6 +163,18 @@ final class SubtitleService {
         language = preferredLanguages.first ?? "tr"
     }
 
+    /// Dosya açılamadı: süren aramayı durdurur ve bulunanları bırakır (açılmayan dosyaya altyazı yüklenmesin).
+    func abandon() {
+        searchTask?.cancel()
+        embeddedTask?.cancel()
+        phase = .idle
+        sources = []
+        candidates = []
+        loaded = nil
+        secondary = nil
+        embeddedTrackID = nil
+    }
+
     /// Kaydedilmiş altyazıyı geri yükler; yoksa otomatik aramayı başlatır.
     func start(restoring record: WatchRecord?) {
         if let record, record.subtitleEnabled == false {
@@ -237,7 +249,7 @@ final class SubtitleService {
 
         // 2. Yanındaki dosya
         setStatus(Source.sidecar.title, .running)
-        let sidecars = findSidecars()
+        let sidecars = await findSidecars()
         if !sidecars.isEmpty {
             setStatus(Source.sidecar.title, .found(sidecars.count))
             candidates = sidecars
@@ -368,7 +380,7 @@ final class SubtitleService {
                 self.setStatus(Source.subdl.title, fromSubdl.map { $0.isEmpty ? .none : .found($0.count) } ?? .skipped("hata"))
             }
             if Task.isCancelled { return }
-            let local = self.findSidecars().filter { $0.language == self.language }
+            let local = await self.findSidecars().filter { $0.language == self.language }
             self.candidates = (local + open + (fromSubdl ?? [])).sorted(by: Self.ranking(languages: languages))
             self.phase = self.candidates.isEmpty ? .notFound : .finished
         }
@@ -675,12 +687,15 @@ final class SubtitleService {
         sources = sources.map { $0.status == .waiting ? SourceStatus(id: $0.id, status: .skipped("gerek yok")) : $0 }
     }
 
-    /// Aynı klasörde <ad>.tr.srt, <ad>.srt, <ad>.ass…
-    func findSidecars() -> [Candidate] {
+    /// Aynı klasörde <ad>.tr.srt, <ad>.srt, <ad>.ass… Klasör arka planda okunur: korumalı klasörde (İndirilenler)
+    /// macOS izin penceresi açıkken ana iş parçacığı beklemesin.
+    func findSidecars() async -> [Candidate] {
         guard let mediaURL else { return [] }
         let folder = mediaURL.deletingLastPathComponent()
         let base = mediaURL.deletingPathExtension().lastPathComponent.lowercased()
-        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        let files = await Task.detached(priority: .userInitiated) {
+            (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        }.value
         return files.compactMap { url -> Candidate? in
             guard AppInfo.subtitleExtensions.contains(url.pathExtension.lowercased()) else { return nil }
             let name = url.deletingPathExtension().lastPathComponent.lowercased()

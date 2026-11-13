@@ -11,9 +11,12 @@ struct PlayerView: View {
     @State private var scrollMonitor: Any?
     @State private var scrollAccumulator: CGFloat = 0
     @State private var dropTargeted = false
+    @State private var fullScreen = false
     @Bindable private var styleStore = SubtitleStyleStore.shared
 
     private var player: PlayerController { session.player }
+    /// Pencerenin kendi köşesiyle aynı (tam ekranda köşe yok).
+    private var windowRadius: CGFloat { fullScreen ? 0 : Theme.videoWindowRadius }
     private var showsChrome: Bool { session.controlsVisible && !session.isMini }
 
     var body: some View {
@@ -57,8 +60,8 @@ struct PlayerView: View {
                     style: styleStore.style,
                     videoRect: videoRect,
                     containerSize: CGSize(width: contentWidth, height: size.height),
-                    // Senkron şeridi dar alanda iki satıra iner (≈ +50 pt).
-                    bottomInset: showsChrome || showsSyncStrip ? (showsSyncStrip ? (contentWidth < 620 ? 250 : 196) : 150) : 0
+                    // Senkron şeridi dar alanda iki satıra iner (≈ +50 pt). Kontrol çubuğu tek satır (≈ 70 pt).
+                    bottomInset: showsChrome || showsSyncStrip ? (showsSyncStrip ? (contentWidth < 620 ? 250 : 196) : 96) : 0
                 )
 
                 if !session.isMini {
@@ -81,6 +84,9 @@ struct PlayerView: View {
                 .padding(.leading, 18)
 
                 HUDView(center: session.hud)
+                    .frame(width: contentWidth, height: size.height)
+
+                PlayPauseFlashView(flash: session.playPauseFlash)
                     .frame(width: contentWidth, height: size.height)
 
                 ReactionsLayer(reactions: session.reactions)
@@ -114,8 +120,10 @@ struct PlayerView: View {
                         if showsSyncStrip {
                             SyncStrip(session: session)
                         } else if !session.isMini {
-                            ControlBar(session: session, compact: contentWidth < (session.inRoom ? 900 : 760))
+                            ControlBar(session: session, compact: contentWidth < (session.inRoom ? 760 : 600))
                                 .frame(maxWidth: .infinity)
+                                .padding(.horizontal, panelOpen ? -4 : -8)
+                                .padding(.bottom, -12)
                         }
                     }
                     .opacity(showsChrome || panelOpen ? 1 : 0)
@@ -196,7 +204,7 @@ struct PlayerView: View {
                 }
 
                 if dropTargeted {
-                    RoundedRectangle(cornerRadius: Theme.videoWindowRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: max(windowRadius - 6, 8), style: .continuous)
                         .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 3, dash: [8, 6]))
                         .padding(6)
                         .allowsHitTesting(false)
@@ -208,11 +216,17 @@ struct PlayerView: View {
             .animation(Theme.spring, value: session.tracksOpen)
             .animation(Theme.spring, value: session.nextEpisodeCountdown != nil)
         }
-        .clipShape(RoundedRectangle(cornerRadius: session.isMini ? 14 : Theme.videoWindowRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: windowRadius, style: .continuous))
         .environment(\.colorScheme, .dark)
         .background(WindowAccessor { window in
             if session.window !== window { session.window = window }
         })
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
+            if (note.object as? NSWindow) === session.window { fullScreen = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willExitFullScreenNotification)) { note in
+            if (note.object as? NSWindow) === session.window { fullScreen = false }
+        }
         .onContinuousHover { phase in
             if case .active = phase { session.userActivity() }
         }
