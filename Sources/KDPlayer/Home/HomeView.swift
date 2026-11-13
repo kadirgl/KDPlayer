@@ -10,9 +10,12 @@ struct HomeView: View {
     @Query(sort: \WatchRecord.lastOpened, order: .reverse) private var records: [WatchRecord]
     @State private var roomCode = ""
     @State private var dropTargeted = false
+    /// Bulunamayan dosyalar (fileHash). Arka planda bakılır; taşınan dosyanın yeni yeri yer iminden bulunur.
+    @State private var missing: Set<String> = []
 
+    /// Son açılan videolar: yarım kalan, bitirilen ve kısa izlenenler dahil (geçmiş "kaybolmasın").
     private var continueItems: [WatchRecord] {
-        records.filter { $0.isResumable && $0.fileExists }.prefix(6).map { $0 }
+        records.filter(\.isPlayable).prefix(12).map { $0 }
     }
 
     private var isFirstRun: Bool { continueItems.isEmpty }
@@ -45,6 +48,7 @@ struct HomeView: View {
             }
         }
         .onAppear { app.resizeHome(firstRun: isFirstRun) }
+        .task(id: continueItems.map { $0.fileHash + $0.path }) { await locateFiles() }
         .onChange(of: isFirstRun) { _, value in app.resizeHome(firstRun: value) }
         .onChange(of: app.homeShown) { app.resizeHome(firstRun: isFirstRun) }
         .onChange(of: app.windowReady) { app.resizeHome(firstRun: isFirstRun) }
@@ -138,7 +142,7 @@ struct HomeView: View {
     private var continueSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("İzlemeye devam et").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                Text("Son izlenenler").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.textPrimary)
                 Spacer()
                 Button("Geçmişi temizle", action: clearHistory)
                     .buttonStyle(.plain)
@@ -149,7 +153,18 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(continueItems) { record in
-                        ContinueRow(record: record) { app.open(record.url) }
+                        let isMissing = missing.contains(record.fileHash)
+                        ContinueRow(record: record, missing: isMissing) {
+                            if isMissing { relink(record) } else { app.open(record.url) }
+                        }
+                        .contextMenu {
+                            if !isMissing {
+                                Button("Finder'da göster") { NSWorkspace.shared.activateFileViewerSelecting([record.url]) }
+                            } else {
+                                Button("Dosyanın yerini göster…") { relink(record) }
+                            }
+                            Button("Geçmişten kaldır", role: .destructive) { remove(record) }
+                        }
                     }
                 }
             }
@@ -162,6 +177,41 @@ struct HomeView: View {
         guard !code.isEmpty else { return }
         app.join(code: code)
         roomCode = ""
+    }
+
+    /// Dosyalar arka planda aranır; taşınanın kaydı yeni yerine güncellenir, bulunamayan soluk gösterilir.
+    private func locateFiles() async {
+        let items = continueItems.map { ($0.fileHash, $0.path, $0.bookmark) }
+        let states = await Task.detached(priority: .utility) {
+            items.map { item in (item.0, RecordLocator.locate(path: item.1, bookmark: item.2)) }
+        }.value
+        var gone: Set<String> = []
+        for (hash, state) in states {
+            switch state {
+            case .available: break
+            case .missing: gone.insert(hash)
+            case .moved(let path): records.first { $0.fileHash == hash }?.path = path
+            }
+        }
+        if states.contains(where: { if case .moved = $0.1 { true } else { false } }) { try? context.save() }
+        missing = gone
+    }
+
+    /// Taşınmış/yeniden adlandırılmış dosyayı kullanıcıya seçtirir; aynı dosyaysa (hash) kayıt kendiliğinden eşleşir.
+    private func relink(_ record: WatchRecord) {
+        let panel = NSOpenPanel()
+        panel.message = "\(record.title) dosyasını bul"
+        panel.prompt = "Aç"
+        panel.allowedContentTypes = [.movie, .video, .audiovisualContent]
+        panel.directoryURL = record.url.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        app.open(url)
+    }
+
+    private func remove(_ record: WatchRecord) {
+        try? FileManager.default.removeItem(at: record.thumbnailURL)
+        context.delete(record)
+        try? context.save()
     }
 
     private func clearHistory() {
@@ -198,6 +248,7 @@ private struct StepCard: View {
 
 private struct ContinueRow: View {
     let record: WatchRecord
+    var missing = false
     let onOpen: () -> Void
     @State private var hovering = false
 
@@ -209,9 +260,9 @@ private struct ContinueRow: View {
                     HStack(spacing: 8) {
                         Text(record.title).font(.system(size: 14, weight: .semibold)).lineLimit(1)
                         Spacer(minLength: 0)
-                        Text(Format.remainingText(record.remaining))
+                        Text(status)
                             .font(.system(size: 12)).monospacedDigit()
-                            .foregroundStyle(Theme.textSecondary)
+                            .foregroundStyle(missing ? Theme.warning : Theme.textSecondary)
                     }
                     ZStack(alignment: .leading) {
                         Capsule().fill(Theme.track)
@@ -223,7 +274,7 @@ private struct ContinueRow: View {
                     Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.textSecondary).lineLimit(1)
                 }
                 .foregroundStyle(Theme.textPrimary)
-                Image(systemName: "play.fill")
+                Image(systemName: missing ? "magnifyingglass" : record.finished ? "arrow.counterclockwise" : "play.fill")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .frame(width: 44, height: 44)
@@ -231,17 +282,28 @@ private struct ContinueRow: View {
                     .accessibilityHidden(true)
             }
             .padding(10)
+            .opacity(missing ? 0.6 : 1)
             .glass(radius: 22)
             .brightness(hovering ? 0.03 : 0)
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
         .buttonStyle(PressScale())
         .onHover { hovering = $0 }
-        .accessibilityLabel("\(record.title), \(Format.time(record.position)) konumundan devam et")
+        .accessibilityLabel(missing ? "\(record.title), dosya bulunamadı, yerini göster" : "\(record.title), \(status)")
+        .help(missing ? "Dosya taşınmış ya da silinmiş: tıklayıp yerini göster" : record.path)
+    }
+
+    /// "12 dk kaldı" · "İzlendi" · "Dosya bulunamadı"
+    private var status: String {
+        if missing { return "Dosya bulunamadı" }
+        if record.finished || record.position >= record.duration * 0.95 { return "İzlendi" }
+        if !record.isResumable { return Format.duration(record.duration) }
+        return Format.remainingText(record.remaining)
     }
 
     private var subtitle: String {
-        var parts = [Format.time(record.position)]
+        if missing { return "Taşındıysa tıklayıp yerini göster · \(record.url.deletingLastPathComponent().lastPathComponent)" }
+        var parts = record.isResumable ? [Format.time(record.position)] : []
         if !record.detail.isEmpty { parts.append(record.detail) }
         if let language = record.subtitleLanguage, let name = Language.name(for: language) { parts.append("\(name) altyazı") }
         return parts.joined(separator: " · ")

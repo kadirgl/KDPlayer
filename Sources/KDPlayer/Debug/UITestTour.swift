@@ -235,7 +235,8 @@ enum UITestTour {
         await step("50-resume", app.window, settle: 0.2)
         session.resume(fromStart: false)
         await sleep(1)
-        check(abs(session.player.time - 90) < 5, "Kaldığı yerden açıldı (\(Int(session.player.time)) sn)")
+        // Kart engellemez: film açılır açılmaz kaldığı yerden oynar.
+        check(session.player.isPlaying && (88...100).contains(session.player.time), "Kaldığı yerden açıldı (\(Int(session.player.time)) sn)")
 
         // Bozuk dosya
         let broken = FileManager.default.temporaryDirectory.appendingPathComponent("Bozuk.Film.2024.mkv")

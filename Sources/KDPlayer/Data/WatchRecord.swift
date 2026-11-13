@@ -29,6 +29,9 @@ final class WatchRecord {
     var audioTrackID: Int?
     var audioDelay: Int
 
+    /// Dosyanın macOS yer imi: dosya taşınır ya da yeniden adlandırılırsa yeni yeri bulunur (geçmiş kaybolmasın).
+    var bookmark: Data?
+
     init(fileHash: String, path: String, title: String) {
         self.fileHash = fileHash
         self.path = path
@@ -48,6 +51,8 @@ final class WatchRecord {
     var progress: Double { duration > 0 ? min(1, position / duration) : 0 }
     var remaining: Double { max(0, duration - position) }
     var fileExists: Bool { FileManager.default.fileExists(atPath: path) }
+    /// Açılabilir bir video (bozuk dosyaların kaydı listede görünmesin).
+    var isPlayable: Bool { duration > 0 }
 
     var thumbnailURL: URL { AppInfo.thumbnailsDirectory.appendingPathComponent("\(fileHash).png") }
 
@@ -59,5 +64,30 @@ final class WatchRecord {
     /// Kaldığı yerden devam sorulmalı mı (ilk dakikayı ve son %5'i sayma).
     var isResumable: Bool {
         !finished && position > 60 && (duration <= 0 || position < duration * 0.95)
+    }
+}
+
+/// Geçmişteki dosyanın durumu. Ana iş parçacığında sorulmaz: İndirilenler gibi korumalı klasörlerde macOS
+/// izin isterken beklemek arayüzü dondurur.
+enum RecordLocator {
+    enum State: Equatable { case available, moved(String), missing }
+
+    nonisolated static func locate(path: String, bookmark: Data?) -> State {
+        if exists(path) { return .available }
+        if let bookmark {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &stale),
+               url.path != path, exists(url.path) {
+                return .moved(url.path)
+            }
+        }
+        return .missing
+    }
+
+    /// İzin yoksa (EPERM/EACCES) dosya büyük olasılıkla yerindedir: açınca macOS izni sorar.
+    nonisolated static func exists(_ path: String) -> Bool {
+        var info = stat()
+        if stat(path, &info) == 0 { return true }
+        return errno != ENOENT && errno != ENOTDIR
     }
 }

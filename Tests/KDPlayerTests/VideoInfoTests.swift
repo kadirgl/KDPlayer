@@ -27,3 +27,35 @@ struct VideoInfoTests {
         #expect(video(1080, 1920).resolutionLabel == "1920p") // dikey video olduğu gibi
     }
 }
+
+@Suite("Geçmişteki dosyayı bulma")
+struct RecordLocatorTests {
+    @Test func findsMovedFileByBookmarkAndReportsDeleted() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("kd-loc-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let original = dir.appendingPathComponent("Film.2020.mkv")
+        try Data("video".utf8).write(to: original)
+        let bookmark = try original.bookmarkData()
+        #expect(RecordLocator.locate(path: original.path, bookmark: bookmark) == .available)
+
+        // Taşındı / yeniden adlandırıldı: yer imi yeni yeri bulur.
+        let sub = dir.appendingPathComponent("Filmler", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let moved = sub.appendingPathComponent("Film (2020).mkv")
+        try FileManager.default.moveItem(at: original, to: moved)
+        let state = RecordLocator.locate(path: original.path, bookmark: bookmark)
+        guard case .moved(let newPath) = state else {
+            Issue.record("taşınan dosya bulunamadı: \(state)")
+            return
+        }
+        // /var ↔ /private/var farkı olabilir: aynı dosya mı?
+        #expect(URL(fileURLWithPath: newPath).lastPathComponent == "Film (2020).mkv")
+        #expect(FileManager.default.contentsEqual(atPath: newPath, andPath: moved.path))
+
+        // Silindi: bulunamaz.
+        try FileManager.default.removeItem(at: moved)
+        #expect(RecordLocator.locate(path: original.path, bookmark: bookmark) == .missing)
+        #expect(RecordLocator.locate(path: original.path, bookmark: nil) == .missing)
+    }
+}

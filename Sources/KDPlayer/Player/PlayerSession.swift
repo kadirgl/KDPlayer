@@ -156,6 +156,7 @@ final class PlayerSession {
         self.record = record
         record?.lastOpened = .now
         record?.path = url.path
+        record?.bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
 
         #if DEBUG
         PerfTimeline.mark("record")
@@ -169,9 +170,10 @@ final class PlayerSession {
             case .always:
                 start = record.position
             case .ask:
+                // Engellemez: film kaldığı yerden hemen oynar, köşedeki kart birkaç saniye "Baştan başla" sunar.
+                // (Eskiden kart açıkken film duraklatılıp bekletiliyordu; ilk kare çizilmeden durduğu için
+                // ekran 5–6 sn karanlık kalıyordu.)
                 start = record.position
-                pauseOnStart = true
-                player.silenced = true
                 resumePrompt = ResumePrompt(position: record.position, duration: record.duration, lastOpened: record.lastOpened)
                 startResumeCountdown()
             case .never:
@@ -278,7 +280,7 @@ final class PlayerSession {
         openWatchdog = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(8))
             guard let self, !Task.isCancelled, self.url == opened, !self.player.hasStarted,
-                  self.blockingError == nil, self.resumePrompt == nil, !self.player.state.isError else { return }
+                  self.blockingError == nil, !self.player.state.isError else { return }
             self.player.stop()
             self.blockingError = self.makeError(message: "8 sn içinde oynatma başlamadı (\(self.player.duration > 0 ? "süre okundu" : "süre okunamadı"))")
         }
@@ -403,7 +405,7 @@ final class PlayerSession {
                 }
                 self.hideTask = nil
                 guard self.player.isPlaying, self.panel == nil, !self.tracksOpen, !self.hoveringControls,
-                      self.resumePrompt == nil, self.blockingError == nil, !self.showsRoomPanel,
+                      self.blockingError == nil, !self.showsRoomPanel,
                       !self.roomSetupVisible, !self.readyCheckVisible else { return }
                 withAnimation(.easeInOut(duration: 0.3)) { self.controlsVisible = false }
                 NSCursor.setHiddenUntilMouseMoves(true)
@@ -431,10 +433,7 @@ final class PlayerSession {
     // MARK: Eylemler
 
     func togglePlayPause() {
-        if resumePrompt != nil {
-            resume(fromStart: false)
-            return
-        }
+        if resumePrompt != nil { dismissResumePrompt() }
         guard roomAllowsControl() else { return }
         let willPlay = !player.isPlaying
         pausedForBuffering = false
@@ -561,16 +560,17 @@ final class PlayerSession {
         pauseOnStart = false
         player.silenced = false
         if fromStart { player.seek(to: 0) }
-        player.play()
+        if !player.isPlaying { player.play() }
         scheduleHide()
     }
 
+    /// "Kaldığın yerden devam ediliyor" kartı 8 sn sonra kendiliğinden kaybolur (film zaten oynuyor).
     private func startResumeCountdown() {
         countdownTask?.cancel()
         countdownTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(8))
             guard let self, !Task.isCancelled, self.resumePrompt != nil else { return }
-            self.resume(fromStart: false)
+            withAnimation(.easeOut(duration: 0.3)) { self.dismissResumePrompt() }
         }
     }
 

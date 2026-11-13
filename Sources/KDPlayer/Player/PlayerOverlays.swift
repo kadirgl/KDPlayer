@@ -1,43 +1,40 @@
 import SwiftUI
 
-/// "Kaldığın yerden devam et?" (ekran 10). Space ile devam; 5 sn içinde seçilmezse kaldığı yerden açılır.
+/// "Kaldığın yerden devam ediliyor" kartı: film zaten kaldığı yerden oynar; sol altta birkaç saniye
+/// "Baştan başla" seçeneği sunar ve kendiliğinden kaybolur (video sitelerindeki gibi, engellemez).
 struct ResumePromptView: View {
     let prompt: PlayerSession.ResumePrompt
     let session: PlayerSession
     @State private var appeared = false
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.45).ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Kaldığın yerden devam et?").font(.system(size: 14, weight: .semibold))
-                    Text("\(Format.time(prompt.position)) · \(Format.relative(prompt.lastOpened)) izledin")
-                        .font(.system(size: 12)).foregroundStyle(Overlay.secondary).monospacedDigit()
-                }
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Overlay.track)
-                    GeometryReader { proxy in
-                        Capsule().fill(Theme.accent)
-                            .frame(width: proxy.size.width * (prompt.duration > 0 ? prompt.position / prompt.duration : 0))
-                    }
-                }
-                .frame(height: 4)
-                HStack(spacing: 8) {
-                    Button("Devam et") { session.resume(fromStart: false) }
-                        .buttonStyle(.kd(.primary, height: 38, fontSize: 12.5, fullWidth: true))
-                        .keyboardShortcut(.defaultAction)
-                    Button("Baştan başla") { session.resume(fromStart: true) }
-                        .buttonStyle(.kd(.raised, height: 38, fontSize: 12.5, fullWidth: true))
-                }
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Kaldığın yerden devam ediliyor").font(.system(size: 13, weight: .semibold))
+                Text("\(Format.time(prompt.position)) · \(Format.relative(prompt.lastOpened)) izledin")
+                    .font(.system(size: 11.5)).foregroundStyle(Overlay.secondary).monospacedDigit()
             }
-            .foregroundStyle(Overlay.text)
-            .padding(16)
-            .frame(width: 280)
-            .overlayGlass(radius: 22)
-            .scaleEffect(appeared ? 1 : 0.96)
-            .onAppear { withAnimation(Theme.spring) { appeared = true } }
+            Button("Baştan başla") { session.resume(fromStart: true) }
+                .buttonStyle(.kd(.raised, height: 32, fontSize: 12))
+            Button { session.dismissResumePrompt() } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Overlay.secondary)
+            .accessibilityLabel("Kapat")
         }
+        .foregroundStyle(Overlay.text)
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 10)
+        .overlayGlass(radius: 18)
+        .offset(y: appeared ? 0 : 12)
+        .opacity(appeared ? 1 : 0)
+        .onAppear { withAnimation(Theme.spring) { appeared = true } }
+        .onHover { session.hoveringControls = $0 }
     }
 }
 

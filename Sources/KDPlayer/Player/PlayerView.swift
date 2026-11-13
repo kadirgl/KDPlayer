@@ -41,16 +41,27 @@ struct PlayerView: View {
                     .allowsHitTesting(false)
                 if !player.hasVideoFrame {
                     Color.black.allowsHitTesting(false)
+                    // Ağır dosyada (4K, yazılımla çözülen VP9/AV1) ilk kare 1–2 sn sürebilir: karanlık değil, yükleniyor.
+                    if session.url != nil, session.blockingError == nil {
+                        LoadingIndicator()
+                            .frame(width: size.width, height: size.height)
+                            .allowsHitTesting(false)
+                    }
                 }
 
                 gestureLayer(size: size)
 
                 // Okunabilirlik için üst ve alt karartma.
+                // Yükseklikler pencereye oranlı ve çerçeve sabit: sabit 140 + 260 pt, 400 pt'den kısa pencerede (mini)
+                // ZStack'i büyütüp tüm katmanları yukarı kaydırıyordu.
                 VStack(spacing: 0) {
-                    LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom).frame(height: 140)
-                    Spacer()
-                    LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom).frame(height: 260)
+                    LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: min(140, size.height * 0.3))
+                    Spacer(minLength: 0)
+                    LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: min(260, size.height * 0.45))
                 }
+                .frame(width: size.width, height: size.height)
                 .opacity(showsChrome ? 1 : 0)
                 .allowsHitTesting(false)
 
@@ -86,7 +97,13 @@ struct PlayerView: View {
                 HUDView(center: session.hud)
                     .frame(width: contentWidth, height: size.height)
 
-                PlayPauseFlashView(flash: session.playPauseFlash)
+                if session.isMini && session.controlsVisible {
+                    MiniControls(session: session)
+                        .frame(width: size.width, height: size.height)
+                        .transition(.opacity)
+                }
+
+                PlayPauseFlashView(flash: session.playPauseFlash, diameter: session.isMini ? 56 : 78)
                     .frame(width: contentWidth, height: size.height)
 
                 ReactionsLayer(reactions: session.reactions)
@@ -188,9 +205,12 @@ struct PlayerView: View {
                         .transition(.opacity)
                 }
 
-                if let prompt = session.resumePrompt {
+                if let prompt = session.resumePrompt, !session.isMini {
                     ResumePromptView(prompt: prompt, session: session)
-                        .frame(width: size.width, height: size.height)
+                        .padding(.leading, 20)
+                        .padding(.bottom, showsChrome ? 104 : 24)
+                        .frame(width: contentWidth, height: size.height, alignment: .bottomLeading)
+                        .animation(Theme.spring, value: showsChrome)
                         .transition(.opacity)
                 }
 
@@ -296,12 +316,14 @@ struct PlayerView: View {
 
     // MARK: Jestler
 
-    /// Tek tık: oynat/duraklat. Çift tık: sol yarı −10 sn, sağ yarı +10 sn, orta tam ekran.
+    /// Tek tık: oynat/duraklat. Çift tık: sol yarı −10 sn, sağ yarı +10 sn, orta tam ekran (mini pencerede: büyüt).
     private func gestureLayer(size: CGSize) -> some View {
         Color.clear
             .contentShape(Rectangle())
             .gesture(
                 SpatialTapGesture(count: 2).onEnded { value in
+                    // Mini pencerede çift tık: normal boyuta dön.
+                    if session.isMini { session.toggleMini(); return }
                     let x = value.location.x / max(size.width, 1)
                     if x < 0.33 {
                         session.seek(by: -10)
@@ -314,8 +336,6 @@ struct PlayerView: View {
                 .exclusively(before: TapGesture(count: 1).onEnded {
                     if session.tracksOpen {
                         withAnimation(Theme.spring) { session.tracksOpen = false }
-                    } else if session.isMini {
-                        session.userActivity()
                     } else {
                         session.togglePlayPause()
                     }
@@ -368,7 +388,7 @@ struct PlayerView: View {
     /// iki parmak kaydırma o katmanındır; yoksa ses ayarına dönüşür ve formlar kaymaz.
     private var volumeScrollAllowed: Bool {
         session.panel == nil && !session.tracksOpen && !session.roomSetupVisible
-            && session.resumePrompt == nil && session.blockingError == nil
+            && session.blockingError == nil
             && !(session.inRoom && (session.showsRoomPanel || session.room.meta?.readyCheck == true))
     }
 
@@ -415,5 +435,55 @@ private struct SubtitleLayer: View {
             bottomInset: bottomInset
         )
         .equatable()
+    }
+}
+
+/// Mini (resim içinde resim) pencerenin kontrolleri: üzerine gelince belirir. Ortada −10 · oynat · +10,
+/// köşede büyüt, altta zaman çubuğu. Videoya tıklamak da oynatır/duraklatır, çift tık büyütür.
+private struct MiniControls: View {
+    let session: PlayerSession
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [.black.opacity(0.45), .black.opacity(0.15), .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
+                .allowsHitTesting(false)
+
+            HStack(spacing: 14) {
+                BarButton(systemName: "gobackward.10", label: "10 saniye geri", iconSize: 18) { session.seek(by: -10) }
+                PlayButton(isPlaying: session.player.isPlaying, size: 48) { session.togglePlayPause() }
+                BarButton(systemName: "goforward.10", label: "10 saniye ileri", iconSize: 18) { session.seek(by: 10) }
+            }
+
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    BarButton(systemName: "arrow.up.left.and.arrow.down.right", label: "Büyüt", help: "Normal boyuta dön (çift tık)", iconSize: 14) {
+                        session.toggleMini()
+                    }
+                }
+                Spacer()
+                Scrubber(session: session)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+        }
+        .foregroundStyle(Overlay.text)
+        .environment(\.colorScheme, .dark)
+        .onHover { session.hoveringControls = $0 }
+    }
+}
+
+/// İlk kare gelene kadar ortada beliren gösterge; çok kısa açılışlarda yanıp sönmesin diye 0,4 sn gecikmeli.
+private struct LoadingIndicator: View {
+    @State private var visible = false
+
+    var body: some View {
+        KDSpinner()
+            .opacity(visible ? 1 : 0)
+            .task {
+                try? await Task.sleep(for: .milliseconds(400))
+                withAnimation(.easeOut(duration: 0.25)) { visible = true }
+            }
     }
 }

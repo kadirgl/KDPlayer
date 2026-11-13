@@ -7,15 +7,33 @@ struct KDPlayerApp: App {
     private let app = AppModel.shared
     private let container: ModelContainer
 
+    /// İzleme geçmişi. Açılamazsa (bozuk ya da uyumsuz) silinmez, yanına yedeklenip yenisi açılır.
+    private static func makeContainer() -> ModelContainer {
+        #if DEBUG
+        // Testler kullanıcının gerçek geçmişine yazmasın.
+        let env = ProcessInfo.processInfo.environment
+        if env["KD_UITEST"] != nil || env["KD_PERFTEST"] != nil || env["KD_TEMP_HISTORY"] != nil {
+            return try! ModelContainer(for: WatchRecord.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        }
+        if let path = env["KD_HISTORY_STORE"] {
+            return try! ModelContainer(for: WatchRecord.self, configurations: ModelConfiguration(url: URL(fileURLWithPath: path)))
+        }
+        #endif
+        let store = AppInfo.supportDirectory.appendingPathComponent("History.store")
+        if let container = try? ModelContainer(for: WatchRecord.self, configurations: ModelConfiguration(url: store)) {
+            return container
+        }
+        let stamp = Int(Date.now.timeIntervalSince1970)
+        for suffix in ["", "-wal", "-shm"] {
+            let file = URL(fileURLWithPath: store.path + suffix)
+            try? FileManager.default.moveItem(at: file, to: URL(fileURLWithPath: store.path + ".yedek-\(stamp)" + suffix))
+        }
+        return try! ModelContainer(for: WatchRecord.self, configurations: ModelConfiguration(url: store))
+    }
+
     init() {
         SettingsKey.registerDefaults()
-        do {
-            container = try ModelContainer(for: WatchRecord.self, configurations: ModelConfiguration(url: AppInfo.supportDirectory.appendingPathComponent("History.store")))
-        } catch {
-            // Bozuk veritabanı: sıfırdan başla (geçmiş kaybolur ama uygulama açılır).
-            try? FileManager.default.removeItem(at: AppInfo.supportDirectory.appendingPathComponent("History.store"))
-            container = try! ModelContainer(for: WatchRecord.self, configurations: ModelConfiguration(url: AppInfo.supportDirectory.appendingPathComponent("History.store")))
-        }
+        container = Self.makeContainer()
     }
 
     var body: some Scene {

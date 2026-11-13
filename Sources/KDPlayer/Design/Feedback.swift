@@ -236,9 +236,11 @@ struct HUDView: View {
 }
 
 /// Oynat/duraklat geri bildirimi: ortada koyu daire içinde simge belirir, büyüyerek kaybolur (≈ 0,6 sn).
-/// Video sitelerindeki alışılmış davranış; tıklamayı engellemez.
+/// Video sitelerindeki alışılmış davranış; tıklamayı engellemez. Büyüme `scaleEffect` ile değil boyutla yapılır:
+/// AppKit'in çerçeve dönüşümü pencere küçülünce (mini) merkezi kaydırıyordu, boyut her zaman ortalı kalır.
 struct PlayPauseFlashView: View {
     let flash: PlayerSession.PlayPauseFlash?
+    var diameter: CGFloat = 78
 
     private struct Frame {
         var scale: CGFloat = 1
@@ -246,28 +248,32 @@ struct PlayPauseFlashView: View {
     }
 
     var body: some View {
-        Image(systemName: flash?.playing == true ? "play.fill" : "pause.fill")
-            .font(.system(size: 30, weight: .bold))
-            .offset(x: flash?.playing == true ? 2 : 0)
-            .foregroundStyle(.white)
-            .frame(width: 78, height: 78)
-            .background(Circle().fill(.black.opacity(0.5)))
-            .keyframeAnimator(initialValue: Frame(), trigger: flash?.id) { content, frame in
-                content.scaleEffect(frame.scale).opacity(frame.opacity)
-            } keyframes: { _ in
-                // Yalnızca doğrusal kareler: süresi çok kısa kareyle yan yana CubicKeyframe NaN üretip
-                // AppKit'i çökertiyor (setFrameTransform: isfinite).
-                KeyframeTrack(\.scale) {
-                    LinearKeyframe(0.9, duration: 0.01)
-                    LinearKeyframe(1.45, duration: 0.6, timingCurve: .easeOut)
+        let playing = flash?.playing == true
+        KeyframeAnimator(initialValue: Frame(), trigger: flash?.id) { frame in
+            let size = diameter * frame.scale
+            Circle()
+                .fill(.black.opacity(0.5))
+                .frame(width: size, height: size)
+                .overlay {
+                    Image(systemName: playing ? "play.fill" : "pause.fill")
+                        .font(.system(size: size * 0.38, weight: .bold))
+                        .offset(x: playing ? size * 0.03 : 0)
+                        .foregroundStyle(.white)
                 }
-                KeyframeTrack(\.opacity) {
-                    LinearKeyframe(1, duration: 0.01)
-                    LinearKeyframe(1, duration: 0.15)
-                    LinearKeyframe(0, duration: 0.45, timingCurve: .easeIn)
-                }
+                .opacity(frame.opacity)
+        } keyframes: { _ in
+            // Yalnızca doğrusal kareler: çok kısa kareyle yan yana CubicKeyframe NaN üretebiliyor.
+            KeyframeTrack(\.scale) {
+                LinearKeyframe(0.9, duration: 0.01)
+                LinearKeyframe(1.45, duration: 0.6, timingCurve: .easeOut)
             }
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+            KeyframeTrack(\.opacity) {
+                LinearKeyframe(1, duration: 0.01)
+                LinearKeyframe(1, duration: 0.15)
+                LinearKeyframe(0, duration: 0.45, timingCurve: .easeIn)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
