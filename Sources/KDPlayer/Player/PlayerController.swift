@@ -62,10 +62,23 @@ final class PlayerController: NSObject {
     @ObservationIgnored private var lastReport: (time: Double, at: CFTimeInterval)?
     /// Yeni dosya "açılıyor" olayını verene kadar gelen zaman olayları önceki dosyadan kalmadır.
     @ObservationIgnored private var awaitingOpen = false
+    /// Son işlenen zaman olayı (saniyede en çok 15).
+    @ObservationIgnored private var lastTimeEvent: CFTimeInterval = 0
     /// 50+ parçalı dosyalarda her "parça eklendi" olayında listeyi yeniden kurmamak için.
     @ObservationIgnored private var tracksRefreshScheduled = false
     @ObservationIgnored private var lastTrackCheck: CFTimeInterval = 0
     /// libVLC örneği ilk kullanımda oluşur (~50 ms); açılışta pencere çizildikten sonra `warmUp()` ile ısıtılır.
+    /// Tek ve kalıcı görüntü yüzeyi. VLC çıkışı her zaman buna bağlıdır; SwiftUI oynatıcı ekranını yeniden kurunca
+    /// (ana ekran ↔ oynatıcı) aynı yüzey yeni yerine taşınır. Eskiden her ekranda yeni yüzey oluşuyordu ve film,
+    /// yüzey henüz kurulmadan başlarsa VLC eski/bağlanmamış yüzeye çiziyordu: ses gelir, ekran siyah kalırdı.
+    @ObservationIgnored let videoView: VLCVideoView = {
+        let view = VLCVideoView()
+        view.backColor = .black
+        view.fillScreen = false
+        view.autoresizingMask = [.width, .height]
+        return view
+    }()
+
     @ObservationIgnored lazy var mediaPlayer: VLCMediaPlayer = {
         var options = [
             "--no-video-title-show",   // dosya adını görüntüye yazma
@@ -80,6 +93,7 @@ final class PlayerController: NSObject {
         options.append("--freetype-color=\(SubtitleStyleStore.shared.style.color.rgb)")
         let player = VLCMediaPlayer(options: options)
         player.delegate = self
+        player.drawable = videoView
         #if DEBUG
         // Teşhis: KD_VLC_LOG=1 libVLC günlüğünü stderr'e yazar.
         if ProcessInfo.processInfo.environment["KD_VLC_LOG"] != nil {
@@ -453,8 +467,17 @@ extension PlayerController: VLCMediaPlayerDelegate {
     }
 
     func mediaPlayerTimeChanged(_ notification: Notification) {
+        #if DEBUG
+        PlaybackStats.timeEvents += 1
+        #endif
         // Kuyrukta bekleyen, önceki dosyaya ait olay (VLCKit son zamanı önbellekten verir).
         guard !awaitingOpen else { return }
+        // VLC her ses paketinde zaman bildirir: TrueHD'de saniyede ~1200 olay. Her biri gözlenen `time`'ı
+        // değiştirip arayüzü yeniden hesaplatınca ana iş parçacığı boğuluyor, görüntü takılıyordu. Saniyede
+        // 15 güncelleme yeter (altyazı ±70 ms); sarma, ilk kare ve açılış anları beklemeden işlenir.
+        let now = CACurrentMediaTime()
+        if pendingSeek == nil, hasStarted, hasVideoFrame || time > 3, now - lastTimeEvent < 1.0 / 15 { return }
+        lastTimeEvent = now
         let reported = Double(mediaPlayer.time.intValue) / 1000
         if let pendingSeek, let date = pendingSeekDate {
             // VLC sarmayı uygulayana kadar eski zamanı raporlayabilir.

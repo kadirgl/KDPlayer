@@ -5,18 +5,24 @@ import VLCKit
 struct VideoSurface: NSViewRepresentable {
     let player: PlayerController
 
-    func makeNSView(context: Context) -> VLCVideoView {
-        let view = VLCVideoView()
-        view.backColor = .black
-        view.fillScreen = false
-        player.mediaPlayer.drawable = view
-        return view
+    func makeNSView(context: Context) -> VideoHostView {
+        let host = VideoHostView()
+        host.host(player.videoView)
+        return host
     }
 
-    func updateNSView(_ view: VLCVideoView, context: Context) {
-        if player.mediaPlayer.drawable as? VLCVideoView !== view {
-            player.mediaPlayer.drawable = view
-        }
+    func updateNSView(_ host: VideoHostView, context: Context) {
+        if player.videoView.superview !== host { host.host(player.videoView) }
+    }
+}
+
+/// Kalıcı VLC yüzeyini taşıyan kap: her oynatıcı ekranı aynı yüzeyi kendine alır.
+final class VideoHostView: NSView {
+    func host(_ view: NSView) {
+        view.removeFromSuperview()
+        view.frame = bounds
+        view.autoresizingMask = [.width, .height]
+        addSubview(view)
     }
 }
 

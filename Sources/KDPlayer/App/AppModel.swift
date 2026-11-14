@@ -81,6 +81,7 @@ final class AppModel {
                 session.downloadsWatcher.start(onFile: { session.handleDownloadedSubtitle($0) })
             }
         }
+        MainActor.assumeIsolated { PlaybackStats.shared.startIfRequested(player: session.player) }
         // Küçük pencere denemesi: KD_DEBUG_SIZE=640x400
         if let raw = ProcessInfo.processInfo.environment["KD_DEBUG_SIZE"] {
             let parts = raw.split(separator: "x").compactMap { Double($0) }
